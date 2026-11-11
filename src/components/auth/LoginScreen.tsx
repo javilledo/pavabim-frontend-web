@@ -2,27 +2,26 @@ import React, { useState } from 'react';
 import { useAuth } from '../../auth/AuthProvider';
 
 export const LoginScreen: React.FC = () => {
-  const {
-    isConfigured,
-    authError,
-    loginWithGoogle,
-    loginWithEmail,
-    clearAuthError,
-  } = useAuth();
+  const { authError, loginWithGoogle, loginWithEmail, clearAuthError } =
+    useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [submittingMode, setSubmittingMode] = useState<
+    'google' | 'email' | null
+  >(null);
+
+  const isSubmitting = submittingMode !== null;
 
   const handleGoogleSignIn = async () => {
     clearAuthError();
-    setSubmitting(true);
+    setSubmittingMode('google');
     try {
       await loginWithGoogle();
     } catch {
       // authError state displays feedback
     } finally {
-      setSubmitting(false);
+      setSubmittingMode(null);
     }
   };
 
@@ -30,13 +29,13 @@ export const LoginScreen: React.FC = () => {
     e.preventDefault();
     if (!email.trim() || !password) return;
     clearAuthError();
-    setSubmitting(true);
+    setSubmittingMode('email');
     try {
       await loginWithEmail(email, password);
     } catch {
       // authError state displays feedback
     } finally {
-      setSubmitting(false);
+      setSubmittingMode(null);
     }
   };
 
@@ -57,27 +56,13 @@ export const LoginScreen: React.FC = () => {
               PAVA<span className="text-pavasal-500">BIM</span>
             </h1>
             <p className="text-xs text-asphalt-300 mt-0.5">
-              Inicia sesión con tu cuenta corporativa para acceder al visor 3D
-              (.frag / .ifc) y proyectos
+              Inicia sesión a través del servidor corporativo Pavasal para acceder
+              al visor 3D (.frag / .ifc) y proyectos
             </p>
           </div>
         </div>
 
         <div className="p-6 space-y-4">
-          {!isConfigured && (
-            <div className="rounded-lg border border-pavasal-700/70 bg-pavasal-950/60 p-3.5 text-xs text-pavasal-200 space-y-1">
-              <p className="font-semibold text-pavasal-400">
-                Firebase Web no configurado
-              </p>
-              <p className="text-[11px] text-asphalt-200 leading-relaxed">
-                Define las variables{' '}
-                <code className="text-pavasal-400">VITE_FIREBASE_*</code> en{' '}
-                <code className="text-pavasal-400">.env</code> para autenticar tu
-                sesión contra <code className="text-pavasal-400">pavabim-backend</code>.
-              </p>
-            </div>
-          )}
-
           {authError && (
             <div className="rounded-lg border border-red-700/70 bg-red-950/60 p-3 text-xs text-red-200">
               {authError}
@@ -86,11 +71,15 @@ export const LoginScreen: React.FC = () => {
 
           <button
             type="button"
-            disabled={submitting || !isConfigured}
+            disabled={isSubmitting}
             onClick={handleGoogleSignIn}
             className="w-full flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2.5 text-xs font-bold text-asphalt-950 hover:bg-asphalt-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
           >
-            <span>Continuar con Google</span>
+            <span>
+              {submittingMode === 'google'
+                ? 'Esperando autorización de Google...'
+                : 'Continuar con Google'}
+            </span>
           </button>
 
           <div className="relative flex py-1 items-center">
@@ -115,7 +104,7 @@ export const LoginScreen: React.FC = () => {
                   setEmail(e.target.value);
                 }}
                 placeholder="usuario@pavasal.com"
-                disabled={!isConfigured || submitting}
+                disabled={isSubmitting}
                 className="w-full rounded border border-asphalt-700 bg-asphalt-800 px-3 py-2 text-xs text-white placeholder-asphalt-500 focus:border-pavasal-500 focus:outline-none disabled:opacity-50"
               />
             </div>
@@ -133,23 +122,27 @@ export const LoginScreen: React.FC = () => {
                   setPassword(e.target.value);
                 }}
                 placeholder="••••••••"
-                disabled={!isConfigured || submitting}
+                disabled={isSubmitting}
                 className="w-full rounded border border-asphalt-700 bg-asphalt-800 px-3 py-2 text-xs text-white placeholder-asphalt-500 focus:border-pavasal-500 focus:outline-none disabled:opacity-50"
               />
             </div>
 
             <button
               type="submit"
-              disabled={!isConfigured || submitting}
+              disabled={isSubmitting}
               className="w-full rounded-md bg-pavasal-500 px-4 py-2.5 text-xs font-bold text-asphalt-950 hover:bg-pavasal-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
             >
-              {submitting ? 'Autenticando...' : 'Iniciar sesión'}
+              {submittingMode === 'email'
+                ? 'Autenticando en servidor...'
+                : 'Iniciar sesión'}
             </button>
           </form>
 
           <p className="pt-2 border-t border-asphalt-800 text-[11px] text-asphalt-400 text-center leading-relaxed">
-            Una vez iniciada la sesión podrás abrir proyectos de Google Drive o
-            trabajar en modo local con archivos <code className="text-pavasal-400">.frag</code> e{' '}
+            La autenticación se valida directamente con{' '}
+            <code className="text-pavasal-400">pavabim-backend</code>. Una vez
+            dentro podrás abrir proyectos de Google Drive o trabajar en modo local
+            con archivos <code className="text-pavasal-400">.frag</code> e{' '}
             <code className="text-pavasal-400">.ifc</code>.
           </p>
         </div>
@@ -159,4 +152,3 @@ export const LoginScreen: React.FC = () => {
 };
 
 export default LoginScreen;
-

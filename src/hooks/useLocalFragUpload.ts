@@ -17,7 +17,7 @@ export function useLocalFragUpload() {
 
       if (!user) {
         setViewerToastError(
-          'Debes iniciar sesión con Firebase para cargar archivos .frag o .ifc.',
+          'Debes iniciar sesión para cargar archivos .frag o .ifc.',
         );
         return;
       }
@@ -101,7 +101,7 @@ export function useLocalFragUpload() {
               }
               if (status === 401) {
                 setViewerToastError(
-                  'El servidor requiere sesión Firebase para convertir este archivo IFC.',
+                  'Tu sesión no es válida o ha expirado. Inicia sesión de nuevo para convertir archivos IFC.',
                 );
                 continue;
               }

@@ -3,8 +3,15 @@ import axios, {
   type AxiosInstance,
   type InternalAxiosRequestConfig,
 } from 'axios';
-import { auth, isFirebaseConfigured } from '../auth/firebase.config';
-import type { ApiErrorResponse } from '../types/api.types';
+import {
+  clearAuthSession,
+  getAccessToken,
+  getRefreshToken,
+  normalizeBackendAuthSession,
+  notifyAuthSessionCleared,
+  saveAuthSession,
+} from '../auth/authSession';
+import type { ApiErrorResponse, BackendAuthResponse } from '../types/api.types';
 
 interface RetriableRequestConfig extends InternalAxiosRequestConfig {
   _retry?: boolean;
@@ -40,6 +47,55 @@ export function normalizeApiPath(path: string): string {
   return withLeadingSlash;
 }
 
+const PUBLIC_AUTH_PATHS = new Set([
+  '/auth/login',
+  '/auth/refresh',
+  '/auth/google/url',
+  '/auth/google/callback',
+]);
+
+function isPublicAuthRequest(url?: string): boolean {
+  if (!url) return false;
+  const cleanPath = normalizeApiPath(url).split('?')[0];
+  return PUBLIC_AUTH_PATHS.has(cleanPath);
+}
+
+let inFlightRefreshPromise: Promise<string | null> | null = null;
+
+/**
+ * Refreshes the backend session token using a single shared in-flight request
+ * so concurrent 401 responses do not trigger duplicate refresh calls.
+ */
+export async function refreshAccessToken(): Promise<string | null> {
+  if (inFlightRefreshPromise) {
+    return inFlightRefreshPromise;
+  }
+
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) {
+    return null;
+  }
+
+  inFlightRefreshPromise = (async () => {
+    try {
+      const { data } = await axios.post<BackendAuthResponse>(
+        `${normalizedBaseUrl}/auth/refresh`,
+        { refreshToken },
+        { timeout: 15000 },
+      );
+      const nextSession = normalizeBackendAuthSession(data, refreshToken);
+      saveAuthSession(nextSession);
+      return nextSession.accessToken;
+    } catch {
+      return null;
+    } finally {
+      inFlightRefreshPromise = null;
+    }
+  })();
+
+  return inFlightRefreshPromise;
+}
+
 apiClient.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
     if (typeof config.url === 'string') {
@@ -55,14 +111,10 @@ apiClient.interceptors.request.use(
       }
     }
 
-    if (isFirebaseConfigured && auth.currentUser) {
-      try {
-        const token = await auth.currentUser.getIdToken();
-        if (token && config.headers) {
-          config.headers.Authorization = `Bearer ${token}`;
-        }
-      } catch (err) {
-        console.warn('[apiClient] Could not retrieve Firebase ID token:', err);
+    if (!isPublicAuthRequest(config.url)) {
+      const token = getAccessToken();
+      if (token && config.headers) {
+        config.headers.Authorization = `Bearer ${token}`;
       }
     }
 
@@ -80,18 +132,20 @@ apiClient.interceptors.response.use(
       error.response?.status === 401 &&
       originalRequest &&
       !originalRequest._retry &&
-      isFirebaseConfigured &&
-      auth.currentUser
+      !isPublicAuthRequest(originalRequest.url)
     ) {
       originalRequest._retry = true;
-      try {
-        const refreshedToken = await auth.currentUser.getIdToken(true);
-        if (refreshedToken && originalRequest.headers) {
+      const refreshedToken = await refreshAccessToken();
+      if (refreshedToken) {
+        if (originalRequest.headers) {
           originalRequest.headers.Authorization = `Bearer ${refreshedToken}`;
         }
         return apiClient(originalRequest);
-      } catch {
-        // Fall through with original 401 error
+      }
+
+      if (getAccessToken() || getRefreshToken()) {
+        clearAuthSession();
+        notifyAuthSessionCleared();
       }
     }
 

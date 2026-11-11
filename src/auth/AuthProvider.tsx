@@ -6,22 +6,22 @@ import React, {
   useState,
   type ReactNode,
 } from 'react';
-import {
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signInWithPopup,
-  signOut,
-  type User as FirebaseUser,
-} from 'firebase/auth';
 import { useQueryClient } from '@tanstack/react-query';
-import { auth, googleProvider, isFirebaseConfigured } from './firebase.config';
+import { authService } from '../api/auth.service';
+import { refreshAccessToken } from '../api/client';
+import {
+  clearAuthSession,
+  getAccessToken,
+  getStoredAuthSession,
+  saveAuthSession,
+  subscribeAuthSessionCleared,
+} from './authSession';
 import { useViewerStore } from '../store/useViewerStore';
 import type { AuthenticatedUser } from '../types/api.types';
 
 interface AuthContextValue {
   user: AuthenticatedUser | null;
   loading: boolean;
-  isConfigured: boolean;
   authError: string | null;
   login: () => Promise<void>;
   loginWithGoogle: () => Promise<void>;
@@ -33,52 +33,62 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-async function mapFirebaseUser(
-  fbUser: FirebaseUser,
-): Promise<AuthenticatedUser> {
-  let isSuperAdmin = false;
-  try {
-    const tokenResult = await fbUser.getIdTokenResult();
-    isSuperAdmin = Boolean(tokenResult.claims?.superadmin);
-  } catch {
-    isSuperAdmin = false;
-  }
-
-  return {
-    uid: fbUser.uid,
-    email: fbUser.email || '',
-    displayName: fbUser.displayName || fbUser.email || 'Usuario BIM',
-    photoURL: fbUser.photoURL || undefined,
-    isSuperAdmin,
-  };
-}
-
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   children,
 }) => {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
-  const [loading, setLoading] = useState<boolean>(isFirebaseConfigured);
+  const [loading, setLoading] = useState<boolean>(() =>
+    Boolean(getStoredAuthSession()),
+  );
   const [authError, setAuthError] = useState<string | null>(null);
 
+  const resetClientSessionState = useCallback(() => {
+    setUser(null);
+    useViewerStore.getState().clearLoadedModels();
+    useViewerStore.getState().resetProjectContext();
+    queryClient.clear();
+  }, [queryClient]);
+
   useEffect(() => {
-    if (!isFirebaseConfigured) {
+    const unsubscribe = subscribeAuthSessionCleared(() => {
+      resetClientSessionState();
+    });
+    return unsubscribe;
+  }, [resetClientSessionState]);
+
+  useEffect(() => {
+    const stored = getStoredAuthSession();
+    if (!stored) {
       setLoading(false);
       return;
     }
 
-    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
-      if (fbUser) {
-        const mapped = await mapFirebaseUser(fbUser);
-        setUser(mapped);
-      } else {
-        setUser(null);
-      }
-      setLoading(false);
-    });
+    let cancelled = false;
 
-    return () => unsubscribe();
-  }, []);
+    authService
+      .fetchCurrentUser()
+      .then((freshUser) => {
+        if (cancelled) return;
+        const latestSession = getStoredAuthSession() || stored;
+        saveAuthSession({ ...latestSession, user: freshUser });
+        setUser(freshUser);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        clearAuthSession();
+        resetClientSessionState();
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [resetClientSessionState]);
 
   const clearAuthError = useCallback(() => {
     setAuthError(null);
@@ -86,23 +96,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
 
   const loginWithGoogle = useCallback(async () => {
     setAuthError(null);
-    if (!isFirebaseConfigured) {
-      const msg =
-        'Firebase Web no está configurado en .env. Define las variables VITE_FIREBASE_* para iniciar sesión.';
-      setAuthError(msg);
-      throw new Error(msg);
-    }
-
     try {
-      await signInWithPopup(auth, googleProvider);
+      const session = await authService.loginWithGooglePopup();
+      saveAuthSession(session);
+      setUser(session.user);
     } catch (err: unknown) {
-      const code =
-        typeof err === 'object' && err !== null && 'code' in err
-          ? String((err as { code?: unknown }).code)
-          : '';
-      if (code === 'auth/popup-closed-by-user') {
-        return;
-      }
       const message =
         err instanceof Error
           ? err.message
@@ -115,15 +113,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   const loginWithEmail = useCallback(
     async (email: string, password: string) => {
       setAuthError(null);
-      if (!isFirebaseConfigured) {
-        const msg =
-          'Firebase Web no está configurado en .env. Define las variables VITE_FIREBASE_* para iniciar sesión.';
-        setAuthError(msg);
-        throw new Error(msg);
-      }
-
       try {
-        await signInWithEmailAndPassword(auth, email.trim(), password);
+        const session = await authService.loginWithEmail(email, password);
+        saveAuthSession(session);
+        setUser(session.user);
       } catch (err: unknown) {
         const message =
           err instanceof Error
@@ -138,18 +131,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
 
   const logout = useCallback(async () => {
     setAuthError(null);
-    if (isFirebaseConfigured && auth.currentUser) {
-      await signOut(auth);
-    }
-    setUser(null);
-    useViewerStore.getState().clearLoadedModels();
-    useViewerStore.getState().resetProjectContext();
-    queryClient.clear();
-  }, [queryClient]);
+    await authService.logout();
+    clearAuthSession();
+    resetClientSessionState();
+  }, [resetClientSessionState]);
 
   const getIdToken = useCallback(async (forceRefresh = false) => {
-    if (!isFirebaseConfigured || !auth.currentUser) return null;
-    return auth.currentUser.getIdToken(forceRefresh);
+    if (forceRefresh) {
+      return refreshAccessToken();
+    }
+    return getAccessToken();
   }, []);
 
   return (
@@ -157,7 +148,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
       value={{
         user,
         loading,
-        isConfigured: isFirebaseConfigured,
         authError,
         login: loginWithGoogle,
         loginWithGoogle,
