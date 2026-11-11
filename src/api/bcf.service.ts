@@ -114,7 +114,7 @@ export const bcfService = {
     const { data } = await apiClient.get<BcfTopic>(
       topicBase(projectId, topicId),
       {
-        params: includeAuthorization ? { includeAuthorization: true } : undefined,
+        params: includeAuthorization ? { includeAuthorization: 'true' } : undefined,
       },
     );
     return data;
@@ -243,7 +243,7 @@ export const bcfService = {
   ): Promise<BcfHeaderFile[]> {
     const { data } = await apiClient.put<BcfHeaderFile[]>(
       `${topicBase(projectId, topicId)}/files`,
-      files,
+      { files },
     );
     return data;
   },
@@ -265,7 +265,7 @@ export const bcfService = {
   ): Promise<BcfRelatedTopic[]> {
     const { data } = await apiClient.put<BcfRelatedTopic[]>(
       `${topicBase(projectId, topicId)}/related_topics`,
-      relatedTopics,
+      { related_topics: relatedTopics },
     );
     return data;
   },

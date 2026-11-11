@@ -48,7 +48,6 @@ export function normalizeApiPath(path: string): string {
 }
 
 const PUBLIC_AUTH_PATHS = new Set([
-  '/auth/login',
   '/auth/refresh',
   '/auth/google/url',
   '/auth/google/callback',

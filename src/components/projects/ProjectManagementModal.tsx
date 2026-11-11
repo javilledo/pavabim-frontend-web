@@ -146,12 +146,12 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
 
   const updateMemberRoleMutation = useMutation({
     mutationFn: ({
-      userId,
+      memberId,
       nextRole,
     }: {
-      userId: string;
+      memberId: string;
       nextRole: ProjectRole;
-    }) => projectsService.updateMemberRole(projectId, userId, { role: nextRole }),
+    }) => projectsService.updateMemberRole(projectId, memberId, { role: nextRole }),
     onSuccess: () => {
       setErrorMsg(null);
       queryClient.invalidateQueries({ queryKey: ['project-members', projectId] });
@@ -160,8 +160,8 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
   });
 
   const removeMemberMutation = useMutation({
-    mutationFn: (userId: string) =>
-      projectsService.removeMember(projectId, userId),
+    mutationFn: (memberId: string) =>
+      projectsService.removeMember(projectId, memberId),
     onSuccess: () => {
       setErrorMsg(null);
       queryClient.invalidateQueries({ queryKey: ['project-members', projectId] });
@@ -463,54 +463,57 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
                 <p className="text-asphalt-400">Cargando miembros...</p>
               ) : (
                 <div className="divide-y divide-asphalt-800 rounded border border-asphalt-700">
-                  {(membersQuery.data || []).map((member) => (
-                    <div
-                      key={member.userId}
-                      className="flex items-center justify-between px-3 py-2 bg-asphalt-950/50"
-                    >
-                      <div>
-                        <div className="font-medium text-asphalt-100">
-                          {member.email}
+                  {(membersQuery.data || []).map((member) => {
+                    const memberId = member.id || member.email;
+                    return (
+                      <div
+                        key={memberId}
+                        className="flex items-center justify-between px-3 py-2 bg-asphalt-950/50"
+                      >
+                        <div>
+                          <div className="font-medium text-asphalt-100">
+                            {member.email}
+                          </div>
+                          <div className="text-[10px] text-asphalt-400">
+                            {member.roleName || member.id}
+                          </div>
                         </div>
-                        <div className="text-[10px] text-asphalt-400">
-                          {member.userId}
+                        <div className="flex items-center gap-2">
+                          {canManageMembers ? (
+                            <>
+                              <select
+                                value={member.roleId}
+                                onChange={(e) =>
+                                  updateMemberRoleMutation.mutate({
+                                    memberId,
+                                    nextRole: e.target.value as ProjectRole,
+                                  })
+                                }
+                                className="rounded border border-asphalt-700 bg-asphalt-800 px-2 py-1 text-[11px] text-white"
+                              >
+                                <option value="viewer">viewer</option>
+                                <option value="editor">editor</option>
+                                <option value="admin">admin</option>
+                              </select>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  removeMemberMutation.mutate(memberId)
+                                }
+                                className="text-red-400 hover:text-red-300 px-1.5 py-0.5 text-[11px]"
+                              >
+                                Quitar
+                              </button>
+                            </>
+                          ) : (
+                            <span className="rounded bg-asphalt-800 px-2 py-0.5 text-[11px] text-pavasal-400">
+                              {member.roleId}
+                            </span>
+                          )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        {canManageMembers ? (
-                          <>
-                            <select
-                              value={member.roleId}
-                              onChange={(e) =>
-                                updateMemberRoleMutation.mutate({
-                                  userId: member.userId,
-                                  nextRole: e.target.value as ProjectRole,
-                                })
-                              }
-                              className="rounded border border-asphalt-700 bg-asphalt-800 px-2 py-1 text-[11px] text-white"
-                            >
-                              <option value="viewer">viewer</option>
-                              <option value="editor">editor</option>
-                              <option value="admin">admin</option>
-                            </select>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                removeMemberMutation.mutate(member.userId)
-                              }
-                              className="text-red-400 hover:text-red-300 px-1.5 py-0.5 text-[11px]"
-                            >
-                              Quitar
-                            </button>
-                          </>
-                        ) : (
-                          <span className="rounded bg-asphalt-800 px-2 py-0.5 text-[11px] text-pavasal-400">
-                            {member.roleId}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

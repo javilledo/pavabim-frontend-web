@@ -176,8 +176,8 @@ export const BcfIssuesPanel: React.FC = () => {
       bcfService.getTopics(projectId, {
         search: searchTerm.trim() || undefined,
         topic_status: statusFilter || undefined,
-        sort_by: 'creation_date',
-        sort_order: 'desc',
+        sortBy: 'creation_date',
+        sortOrder: 'desc',
       }),
     enabled: isRemoteReady,
   });

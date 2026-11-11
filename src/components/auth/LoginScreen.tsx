@@ -2,40 +2,18 @@ import React, { useState } from 'react';
 import { useAuth } from '../../auth/AuthProvider';
 
 export const LoginScreen: React.FC = () => {
-  const { authError, loginWithGoogle, loginWithEmail, clearAuthError } =
-    useAuth();
-
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [submittingMode, setSubmittingMode] = useState<
-    'google' | 'email' | null
-  >(null);
-
-  const isSubmitting = submittingMode !== null;
+  const { authError, loginWithGoogle, clearAuthError } = useAuth();
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleGoogleSignIn = async () => {
     clearAuthError();
-    setSubmittingMode('google');
+    setIsSubmitting(true);
     try {
       await loginWithGoogle();
     } catch {
       // authError state displays feedback
     } finally {
-      setSubmittingMode(null);
-    }
-  };
-
-  const handleEmailSignIn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email.trim() || !password) return;
-    clearAuthError();
-    setSubmittingMode('email');
-    try {
-      await loginWithEmail(email, password);
-    } catch {
-      // authError state displays feedback
-    } finally {
-      setSubmittingMode(null);
+      setIsSubmitting(false);
     }
   };
 
@@ -56,8 +34,7 @@ export const LoginScreen: React.FC = () => {
               PAVA<span className="text-pavasal-500">BIM</span>
             </h1>
             <p className="text-xs text-asphalt-300 mt-0.5">
-              Inicia sesión a través del servidor corporativo Pavasal para acceder
-              al visor 3D (.frag / .ifc) y proyectos
+              Entorno Común de Datos de PAVASAL para trabajar con Modelos BIM
             </p>
           </div>
         </div>
@@ -73,80 +50,42 @@ export const LoginScreen: React.FC = () => {
             type="button"
             disabled={isSubmitting}
             onClick={handleGoogleSignIn}
-            className="w-full flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2.5 text-xs font-bold text-asphalt-950 hover:bg-asphalt-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
+            className="w-full flex items-center justify-center gap-2.5 rounded-md bg-pavasal-500 px-4 py-2.5 text-xs font-bold text-asphalt-950 hover:bg-pavasal-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
           >
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              className="w-4 h-4 shrink-0"
+            >
+              <path
+                fill="#111114"
+                d="M21.8 12.23c0-.71-.06-1.4-.18-2.06H12v3.9h5.49a4.7 4.7 0 0 1-2.04 3.08v2.56h3.3c1.93-1.78 3.05-4.4 3.05-7.48z"
+              />
+              <path
+                fill="#111114"
+                d="M12 22c2.75 0 5.06-.91 6.75-2.46l-3.3-2.56c-.91.61-2.08.98-3.45.98-2.65 0-4.9-1.79-5.7-4.2H2.89v2.64A9.99 9.99 0 0 0 12 22z"
+              />
+              <path
+                fill="#111114"
+                d="M6.3 13.76a5.98 5.98 0 0 1 0-3.52V7.6H2.89a10 10 0 0 0 0 8.8l3.41-2.64z"
+              />
+              <path
+                fill="#111114"
+                d="M12 6.04c1.5 0 2.84.52 3.9 1.53l2.92-2.92C17.05 2.99 14.74 2 12 2A9.99 9.99 0 0 0 2.89 7.6L6.3 10.24c.8-2.41 3.05-4.2 5.7-4.2z"
+              />
+            </svg>
             <span>
-              {submittingMode === 'google'
+              {isSubmitting
                 ? 'Esperando autorización de Google...'
-                : 'Continuar con Google'}
+                : 'Continuar con cuenta corporativa de Google'}
             </span>
           </button>
-
-          <div className="relative flex py-1 items-center">
-            <div className="flex-grow border-t border-asphalt-800" />
-            <span className="mx-3 text-[10px] uppercase tracking-wider text-asphalt-400">
-              o correo y contraseña
-            </span>
-            <div className="flex-grow border-t border-asphalt-800" />
-          </div>
-
-          <form onSubmit={handleEmailSignIn} className="space-y-3">
-            <div>
-              <label className="block text-[11px] font-medium text-asphalt-200 mb-1">
-                Correo electrónico
-              </label>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => {
-                  clearAuthError();
-                  setEmail(e.target.value);
-                }}
-                placeholder="usuario@pavasal.com"
-                disabled={isSubmitting}
-                className="w-full rounded border border-asphalt-700 bg-asphalt-800 px-3 py-2 text-xs text-white placeholder-asphalt-500 focus:border-pavasal-500 focus:outline-none disabled:opacity-50"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-medium text-asphalt-200 mb-1">
-                Contraseña
-              </label>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => {
-                  clearAuthError();
-                  setPassword(e.target.value);
-                }}
-                placeholder="••••••••"
-                disabled={isSubmitting}
-                className="w-full rounded border border-asphalt-700 bg-asphalt-800 px-3 py-2 text-xs text-white placeholder-asphalt-500 focus:border-pavasal-500 focus:outline-none disabled:opacity-50"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full rounded-md bg-pavasal-500 px-4 py-2.5 text-xs font-bold text-asphalt-950 hover:bg-pavasal-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
-            >
-              {submittingMode === 'email'
-                ? 'Autenticando en servidor...'
-                : 'Iniciar sesión'}
-            </button>
-          </form>
-
-          <p className="pt-2 border-t border-asphalt-800 text-[11px] text-asphalt-400 text-center leading-relaxed">
-            La autenticación se valida directamente con{' '}
-            <code className="text-pavasal-400">pavabim-backend</code>. Una vez
-            dentro podrás abrir proyectos de Google Drive o trabajar en modo local
-            con archivos <code className="text-pavasal-400">.frag</code> e{' '}
-            <code className="text-pavasal-400">.ifc</code>.
-          </p>
         </div>
       </div>
+
+      <p className="relative z-10 mt-4 text-xs text-asphalt-400 text-center">
+        Pavasal Empresa Constructora, S.A.U.
+      </p>
     </div>
   );
 };

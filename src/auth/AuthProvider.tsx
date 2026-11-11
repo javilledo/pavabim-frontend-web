@@ -25,7 +25,6 @@ interface AuthContextValue {
   authError: string | null;
   login: () => Promise<void>;
   loginWithGoogle: () => Promise<void>;
-  loginWithEmail: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
   clearAuthError: () => void;
@@ -110,25 +109,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
     }
   }, []);
 
-  const loginWithEmail = useCallback(
-    async (email: string, password: string) => {
-      setAuthError(null);
-      try {
-        const session = await authService.loginWithEmail(email, password);
-        saveAuthSession(session);
-        setUser(session.user);
-      } catch (err: unknown) {
-        const message =
-          err instanceof Error
-            ? err.message
-            : 'Credenciales inválidas o error al iniciar sesión.';
-        setAuthError(message);
-        throw err;
-      }
-    },
-    [],
-  );
-
   const logout = useCallback(async () => {
     setAuthError(null);
     await authService.logout();
@@ -151,7 +131,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
         authError,
         login: loginWithGoogle,
         loginWithGoogle,
-        loginWithEmail,
         logout,
         getIdToken,
         clearAuthError,

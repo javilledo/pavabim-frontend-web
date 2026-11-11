@@ -1,56 +1,57 @@
-# Instrucciones para `pavabim-backend`: Módulo de Autenticación (`/api/auth/*`)
+# Instrucciones para `pavabim-backend`: Módulo de Autenticación Corporativa con Google (`/api/auth/*`)
 
-El frontend (`pavabim-frontend-web`) delega **toda la autenticación** en `pavabim-backend` (no utiliza el SDK cliente de Firebase ni requiere variables `VITE_FIREBASE_*` en el navegador).
+> **Estado detectado al revisar `PAVABIM_BACKEND_APIS.md` (67 endpoints):** actualmente `pavabim-backend` tiene protegidos todos los endpoints de negocio con `FirebaseAuthGuard`, pero todavía **no** expone las rutas `/api/auth/*`. Es necesario implementar este módulo para que el acceso web funcione con cuenta corporativa de Google sin SDK cliente de Firebase en el navegador.
 
-La estrategia más limpia para mantener 100% compatibles todos los guards existentes (`FirebaseAuthGuard`, `ProjectRoleGuard`, `SuperAdminGuard` y `LocalModelsController`) es crear un módulo `AuthModule` (`/api/auth`) en `pavabim-backend` que intercambie credenciales o OAuth de Google mediante **Firebase Identity Toolkit REST API** usando la clave Web de Firebase en el backend (`FIREBASE_WEB_API_KEY`) y devuelva `idToken` + `refreshToken` reales de Firebase.
+El frontend (`pavabim-frontend-web`) delega **toda la autenticación** en `pavabim-backend` y **solo permite acceso mediante cuenta corporativa de Google** (se ha eliminado por completo el acceso por correo y contraseña).
 
-> De este modo `FirebaseAuthGuard` (`firebaseService.verifyIdToken(token)`) sigue funcionando exactamente igual en toda la API sin modificar ningún guard existente.
+La estrategia para mantener 100% compatibles todos los guards existentes (`FirebaseAuthGuard`, `ProjectRoleGuard`, `SuperAdminGuard` y `LocalModelsController`) es crear un módulo `AuthModule` (`/api/auth`) en `pavabim-backend` que intercambie el OAuth2 de Google mediante **Firebase Identity Toolkit REST API** usando la clave Web de Firebase (`FIREBASE_WEB_API_KEY`) y devuelva `idToken` + `refreshToken` reales de Firebase.
 
 ---
 
 ## 1. Contrato HTTP esperado por `pavabim-frontend-web`
 
-### 1.1 `POST /api/auth/login` (público)
-- **Body JSON**:
-  ```json
-  {
-    "email": "usuario@pavasal.com",
-    "password": "********"
-  }
-  ```
-- **Respuesta `200 OK`**:
-  ```json
-  {
-    "accessToken": "<firebase_id_token>",
-    "refreshToken": "<firebase_refresh_token>",
-    "expiresIn": 3600,
-    "user": {
-      "uid": "firebase-uid",
-      "email": "usuario@pavasal.com",
-      "displayName": "Nombre Usuario",
-      "photoURL": "https://...",
-      "isSuperAdmin": false
-    }
-  }
-  ```
-- **Errores**: `401 Unauthorized` si las credenciales son incorrectas o el usuario está deshabilitado.
-
-### 1.2 `GET /api/auth/google/url` (público)
+### 1.1 `GET /api/auth/google/url` (público)
 - **Respuesta `200 OK`**:
   ```json
   {
     "url": "https://accounts.google.com/o/oauth2/v2/auth?..."
   }
   ```
+- Recomendado: añadir `hd` en `generateAuthUrl(...)` si se quiere prefiltrar el selector de cuentas al dominio corporativo (p. ej. `pavasal.com`), manteniendo además validación estricta en el callback.
 
-### 1.3 `GET /api/auth/google/callback` (público — callback del popup OAuth)
+### 1.2 `GET /api/auth/google/callback` (público — callback del popup OAuth)
 - Recibe `code` (y opcionalmente `error`) desde Google.
-- Intercambia `code` por el `id_token` de Google (`googleapis`) y lo canjea en Firebase (`accounts:signInWithIdp`).
+- Intercambia `code` por los tokens de Google (`googleapis`) y valida:
+  1. Que Google devuelve `id_token`.
+  2. Que el correo del usuario pertenece a los dominios corporativos permitidos (por ejemplo leyendo `allowedDomains` de `SettingsService` / Firestore `app_settings`, o `GOOGLE_ALLOWED_DOMAINS`).
+- Canjea el `id_token` de Google en Firebase (`accounts:signInWithIdp`).
+- Calcula `isSuperAdmin` con `rolePermissionsService.isUserSuperAdmin(decoded.uid, decoded.email)` (misma lógica que `SuperAdminGuard`, ya que el backend usa `users/{email} -> rolePermissions/superadmin` en Firestore en lugar de custom claims).
 - Devuelve HTML ligero que notifica a `window.opener` y cierra la ventana emergente (mismo patrón que `DriveController.handleCallback`):
-  - **Éxito**: `type: 'PAVABIM_AUTH_SUCCESS'`, `accessToken`, `refreshToken`, `expiresIn`, `user`.
-  - **Error**: `type: 'PAVABIM_AUTH_ERROR'`, `error`.
+  - **Éxito**:
+    ```js
+    {
+      type: 'PAVABIM_AUTH_SUCCESS',
+      accessToken: '<firebase_id_token>',
+      refreshToken: '<firebase_refresh_token>',
+      expiresIn: 3600,
+      user: {
+        uid: 'firebase-uid',
+        email: 'usuario@pavasal.com',
+        displayName: 'Nombre Usuario',
+        photoURL: 'https://...',
+        isSuperAdmin: true
+      }
+    }
+    ```
+  - **Error** (incluyendo cuenta externa no corporativa):
+    ```js
+    {
+      type: 'PAVABIM_AUTH_ERROR',
+      error: 'Solo se permite el acceso con cuentas corporativas autorizadas.'
+    }
+    ```
 
-### 1.4 `GET /api/auth/me` (protegido con `@UseGuards(FirebaseAuthGuard)`)
+### 1.3 `GET /api/auth/me` (protegido con `@UseGuards(FirebaseAuthGuard)`)
 - Valida `Authorization: Bearer <accessToken>` y devuelve el perfil del usuario actual:
   ```json
   {
@@ -61,18 +62,19 @@ La estrategia más limpia para mantener 100% compatibles todos los guards existe
     "isSuperAdmin": false
   }
   ```
+- **Importante**: `isSuperAdmin` debe evaluarse con `rolePermissionsService.isUserSuperAdmin(user.uid, user.email)` para que coincida exactamente con `SuperAdminGuard` y con el `myRole: 'superadmin'` que devuelve `GET /api/projects`.
 
-### 1.5 `POST /api/auth/refresh` (público)
+### 1.4 `POST /api/auth/refresh` (público)
 - **Body JSON**:
   ```json
   {
     "refreshToken": "<firebase_refresh_token>"
   }
   ```
-- Canjea el `refreshToken` en `https://securetoken.googleapis.com/v1/token` y devuelve el mismo formato que `POST /api/auth/login` (`accessToken`, `refreshToken`, `expiresIn`, `user`).
+- Canjea el `refreshToken` en `https://securetoken.googleapis.com/v1/token` y devuelve `{ accessToken, refreshToken, expiresIn, user }`.
 - **Errores**: `401 Unauthorized` si el refresh token es inválido o fue revocado.
 
-### 1.6 `POST /api/auth/logout` (protegido con `@UseGuards(FirebaseAuthGuard)`)
+### 1.5 `POST /api/auth/logout` (protegido con `@UseGuards(FirebaseAuthGuard)`)
 - Revoca los refresh tokens del usuario en Firebase (`this.firebaseService.auth.revokeRefreshTokens(user.uid)`) y responde `{ "success": true }`.
 
 ---
@@ -87,6 +89,9 @@ FIREBASE_WEB_API_KEY=AIzaSy...
 
 # Redirect URI para login con Google de usuarios (además de GOOGLE_REDIRECT_URI de Drive)
 GOOGLE_AUTH_REDIRECT_URI=http://localhost:3000/api/auth/google/callback
+
+# Opcional: dominios corporativos permitidos separados por coma (además de app_settings.allowedDomains)
+GOOGLE_ALLOWED_DOMAINS=pavasal.com
 ```
 
 En `src/config/configuration.ts`:
@@ -104,10 +109,14 @@ En `src/config/configuration.ts`:
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     redirectUri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/api/drive/auth/callback',
     authRedirectUri: process.env.GOOGLE_AUTH_REDIRECT_URI || 'http://localhost:3000/api/auth/google/callback',
+    allowedDomains: (process.env.GOOGLE_ALLOWED_DOMAINS || '')
+      .split(',')
+      .map((d) => d.trim().toLowerCase())
+      .filter(Boolean),
   },
 ```
 
-> **Google Cloud Console**: registra `http://localhost:3000/api/auth/google/callback` (y la URL de producción) en **URIs de redireccionamiento autorizados** de tu OAuth Client ID.
+> **Google Cloud Console**: registra `http://localhost:3000/api/auth/google/callback` (y la URL de producción) en **URIs de redireccionamiento autorizados** de tu OAuth Client ID. En la pantalla de consentimiento OAuth puedes marcar **Interno** si la organización usa Google Workspace corporativo exclusivo para Pavasal.
 
 ---
 
@@ -117,18 +126,7 @@ En `src/config/configuration.ts`:
 
 ```ts
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsNotEmpty, IsString, MinLength } from 'class-validator';
-
-export class LoginDto {
-  @ApiProperty({ example: 'usuario@pavasal.com' })
-  @IsEmail()
-  email: string;
-
-  @ApiProperty({ example: '********' })
-  @IsString()
-  @MinLength(6)
-  password: string;
-}
+import { IsNotEmpty, IsString } from 'class-validator';
 
 export class RefreshTokenDto {
   @ApiProperty()
@@ -142,14 +140,15 @@ export class RefreshTokenDto {
 
 ```ts
 import {
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
-  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { google } from 'googleapis';
 import { FirebaseService } from '../firebase/firebase.service';
+import { RolePermissionsService } from '../../common/services/role-permissions.service';
 
 export interface BackendAuthUser {
   uid: string;
@@ -168,11 +167,10 @@ export interface BackendAuthResult {
 
 @Injectable()
 export class AuthService {
-  private readonly logger = new Logger(AuthService.name);
-
   constructor(
     private readonly configService: ConfigService,
     private readonly firebaseService: FirebaseService,
+    private readonly rolePermissionsService: RolePermissionsService,
   ) {}
 
   private getFirebaseWebApiKey(): string {
@@ -204,12 +202,35 @@ export class AuthService {
     };
   }
 
+  private async ensureCorporateEmailAllowed(email: string): Promise<void> {
+    const normalized = email.trim().toLowerCase();
+    const domain = normalized.split('@')[1] || '';
+
+    const envDomains =
+      this.configService.get<string[]>('google.allowedDomains') || [];
+
+    // Opcionalmente combinar con allowedDomains de Firestore (app_settings)
+    const allowedDomains = new Set(envDomains.map((d) => d.toLowerCase()));
+    if (allowedDomains.size > 0 && !allowedDomains.has(domain)) {
+      throw new ForbiddenException(
+        `El dominio "${domain}" no está autorizado. Usa tu cuenta corporativa de Google.`,
+      );
+    }
+  }
+
   private async buildSessionFromFirebaseTokens(
     idToken: string,
     refreshToken?: string,
     expiresInRaw?: string | number,
   ): Promise<BackendAuthResult> {
     const decoded = await this.firebaseService.verifyIdToken(idToken);
+    const email = decoded.email || '';
+    await this.ensureCorporateEmailAllowed(email);
+
+    const isSuperAdmin = await this.rolePermissionsService.isUserSuperAdmin(
+      decoded.uid,
+      email,
+    );
     const expiresIn = Number(expiresInRaw || 3600) || 3600;
 
     return {
@@ -218,54 +239,24 @@ export class AuthService {
       expiresIn,
       user: {
         uid: decoded.uid,
-        email: decoded.email || '',
-        displayName: decoded.name || decoded.email || 'Usuario BIM',
+        email,
+        displayName: decoded.name || email || 'Usuario BIM',
         photoURL: decoded.picture,
-        isSuperAdmin: Boolean(decoded.superadmin),
+        isSuperAdmin,
       },
     };
-  }
-
-  async loginWithEmail(email: string, password: string): Promise<BackendAuthResult> {
-    const apiKey = this.getFirebaseWebApiKey();
-    const res = await fetch(
-      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: email.trim(),
-          password,
-          returnSecureToken: true,
-        }),
-      },
-    );
-
-    const data = (await res.json()) as {
-      idToken?: string;
-      refreshToken?: string;
-      expiresIn?: string;
-      error?: { message?: string };
-    };
-
-    if (!res.ok || !data.idToken) {
-      this.logger.warn(`Email login rejected for ${email}: ${data.error?.message}`);
-      throw new UnauthorizedException('Correo o contraseña incorrectos.');
-    }
-
-    return this.buildSessionFromFirebaseTokens(
-      data.idToken,
-      data.refreshToken,
-      data.expiresIn,
-    );
   }
 
   getGoogleAuthorizationUrl(): string {
     const { oauth2Client } = this.createGoogleAuthClient();
+    const envDomains =
+      this.configService.get<string[]>('google.allowedDomains') || [];
+
     return oauth2Client.generateAuthUrl({
       access_type: 'offline',
       prompt: 'select_account',
       scope: ['openid', 'email', 'profile'],
+      ...(envDomains.length === 1 ? { hd: envDomains[0] } : {}),
     });
   }
 
@@ -344,14 +335,20 @@ export class AuthService {
     );
   }
 
-  async getCurrentUserProfile(uid: string): Promise<BackendAuthUser> {
+  async getCurrentUserProfile(uid: string, emailHint?: string): Promise<BackendAuthUser> {
     const record = await this.firebaseService.auth.getUser(uid);
+    const email = record.email || emailHint || '';
+    const isSuperAdmin = await this.rolePermissionsService.isUserSuperAdmin(
+      record.uid,
+      email,
+    );
+
     return {
       uid: record.uid,
-      email: record.email || '',
-      displayName: record.displayName || record.email || 'Usuario BIM',
+      email,
+      displayName: record.displayName || email || 'Usuario BIM',
       photoURL: record.photoURL,
-      isSuperAdmin: Boolean(record.customClaims?.superadmin),
+      isSuperAdmin,
     };
   }
 
@@ -381,22 +378,15 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { FirebaseAuthGuard } from '../../common/guards/firebase-auth.guard';
 import { AuthenticatedUser } from '../../common/types/project.types';
 import { AuthService } from './auth.service';
-import { LoginDto, RefreshTokenDto } from './dto/auth.dto';
+import { RefreshTokenDto } from './dto/auth.dto';
 
 @ApiTags('Authentication')
 @Controller('api/auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @Post('login')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Iniciar sesión con correo y contraseña a través del backend' })
-  login(@Body() dto: LoginDto) {
-    return this.authService.loginWithEmail(dto.email, dto.password);
-  }
-
   @Get('google/url')
-  @ApiOperation({ summary: 'Obtener URL de inicio de sesión con Google (OAuth2)' })
+  @ApiOperation({ summary: 'Obtener URL de inicio de sesión con Google corporativo (OAuth2)' })
   getGoogleUrl() {
     return { url: this.authService.getGoogleAuthorizationUrl() };
   }
@@ -435,7 +425,7 @@ export class AuthController {
 
       return res.send(`
         <html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;">
-          <p>Sesión iniciada. Puedes cerrar esta ventana.</p>
+          <p>Sesión corporativa iniciada. Puedes cerrar esta ventana.</p>
           <script>
             if (window.opener) {
               window.opener.postMessage(${safePayload}, '*');
@@ -472,7 +462,7 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Obtener el perfil del usuario autenticado actual' })
   getMe(@CurrentUser() user: AuthenticatedUser) {
-    return this.authService.getCurrentUserProfile(user.uid);
+    return this.authService.getCurrentUserProfile(user.uid, user.email);
   }
 
   @Post('logout')
@@ -515,4 +505,5 @@ Y añádelo al array `imports` de `AppModule` en `src/app.module.ts`.
 Con estos endpoints activos en `pavabim-backend`:
 - `pavabim-frontend-web` **no necesita ninguna variable `VITE_FIREBASE_*`** en `.env`.
 - Todos los endpoints actuales (`ProjectsController`, `BcfController`, `IfcProcessorController`, `LocalModelsController`, `DriveController`, `SettingsController`) siguen recibiendo un **Firebase ID Token** válido en `Authorization: Bearer <token>`.
+- El acceso queda restringido exclusivamente a cuentas corporativas de Google.
 

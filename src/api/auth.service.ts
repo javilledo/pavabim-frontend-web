@@ -6,10 +6,8 @@ import {
 } from '../auth/authSession';
 import type {
   AuthGoogleUrlResponse,
-  AuthLoginPayload,
   AuthPopupMessageEventData,
   AuthenticatedUser,
-  BackendAuthResponse,
 } from '../types/api.types';
 
 function formatBackendAuthError(err: unknown, fallback: string): Error {
@@ -22,29 +20,6 @@ function formatBackendAuthError(err: unknown, fallback: string): Error {
 }
 
 export const authService = {
-  async loginWithEmail(
-    email: string,
-    password: string,
-  ): Promise<StoredAuthSession> {
-    const payload: AuthLoginPayload = {
-      email: email.trim(),
-      password,
-    };
-
-    try {
-      const { data } = await apiClient.post<BackendAuthResponse>(
-        '/auth/login',
-        payload,
-      );
-      return normalizeBackendAuthSession(data);
-    } catch (err) {
-      throw formatBackendAuthError(
-        err,
-        'Credenciales inválidas o error al autenticar con el servidor.',
-      );
-    }
-  },
-
   async getGoogleAuthUrl(): Promise<AuthGoogleUrlResponse> {
     try {
       const { data } = await apiClient.get<AuthGoogleUrlResponse>(

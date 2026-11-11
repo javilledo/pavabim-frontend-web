@@ -50,11 +50,13 @@ export interface BcfClippingPlane {
   direction: BcfDirection3D;
 }
 
-export type BcfBitmapFormat = 'png' | 'jpg';
+export type BcfBitmapFormat = 'png' | 'jpg' | 'PNG' | 'JPG' | string;
 
 export interface BcfBitmap {
+  guid?: string;
   bitmap_type: BcfBitmapFormat;
-  bitmap_data: string;
+  bitmap_data?: string;
+  snapshot_file_id?: string;
   location: BcfPoint3D;
   normal: BcfDirection3D;
   up: BcfDirection3D;
@@ -105,8 +107,8 @@ export interface BcfViewpointAuthorization {
 export interface BcfViewpoint {
   guid: string;
   index?: number;
-  orthogonal_camera?: BcfOrthogonalCamera;
-  perspective_camera?: BcfPerspectiveCamera;
+  orthogonal_camera?: BcfOrthogonalCamera | null;
+  perspective_camera?: BcfPerspectiveCamera | null;
   camera?: BcfLegacyCamera;
   lines?: BcfLine[];
   clipping_planes?: BcfClippingPlane[];
@@ -132,19 +134,19 @@ export interface BcfComment {
   topic_guid: string;
   date: string;
   author: string;
-  authorUid?: string;
+  author_uid?: string;
   comment: string;
   viewpoint_guid?: string;
-  reply_to_comment_guid?: string;
   modified_date?: string;
   modified_author?: string;
+  modified_author_uid?: string;
   deleted?: boolean;
   authorization?: BcfCommentAuthorization;
 }
 
 export interface BcfBimSnippet {
   snippet_type: string;
-  is_external?: boolean;
+  is_external: boolean;
   reference: string;
   reference_schema: string;
 }
@@ -163,7 +165,7 @@ export interface BcfRelatedTopic {
 export interface BcfHeaderFile {
   ifc_project?: string;
   ifc_spatial_structure_element?: string;
-  file_name?: string;
+  filename?: string;
   date?: string;
   reference?: string;
   is_external?: boolean;
@@ -265,7 +267,7 @@ export interface BcfProjectExtensions {
   project_actions?: string[];
   topic_actions?: string[];
   comment_actions?: string[];
-  strict_validation?: boolean;
+  enforce_extensions?: boolean;
 }
 
 export type UpdateExtensionsPayload = Partial<
@@ -277,7 +279,7 @@ export type UpdateExtensionsPayload = Partial<
     | 'snippet_type'
     | 'priority'
     | 'stage'
-    | 'strict_validation'
+    | 'enforce_extensions'
   >
 >;
 
@@ -297,12 +299,17 @@ export interface QueryTopicsParams {
   priority?: string;
   assigned_to?: string;
   stage?: string;
-  label?: string;
+  labels?: string | string[];
   creation_author?: string;
-  include_deleted?: boolean;
-  overdue_only?: boolean;
-  sort_by?: BcfTopicSortField;
-  sort_order?: 'asc' | 'desc';
+  include_deleted?: boolean | 'true' | 'false';
+  overdue?: boolean | 'true' | 'false';
+  due_before?: string;
+  due_after?: string;
+  server_assigned_id?: string;
+  includeAuthorization?: boolean | 'true' | 'false';
+  includeDetails?: boolean | 'true' | 'false';
+  sortBy?: BcfTopicSortField;
+  sortOrder?: 'asc' | 'desc';
   limit?: number;
   offset?: number;
 }
@@ -375,18 +382,17 @@ export interface BulkUpdateTopicsResponse {
 export interface CreateCommentPayload {
   comment: string;
   viewpoint_guid?: string;
-  reply_to_comment_guid?: string;
 }
 
 export interface UpdateCommentPayload {
-  comment: string;
-  viewpoint_guid?: string;
+  comment?: string;
+  viewpoint_guid?: string | null;
 }
 
 export interface CreateViewpointPayload {
   index?: number;
-  orthogonal_camera?: BcfOrthogonalCamera;
-  perspective_camera?: BcfPerspectiveCamera;
+  orthogonal_camera?: BcfOrthogonalCamera | null;
+  perspective_camera?: BcfPerspectiveCamera | null;
   camera?: BcfLegacyCamera;
   lines?: BcfLine[];
   clipping_planes?: BcfClippingPlane[];

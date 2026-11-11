@@ -19,7 +19,7 @@ export interface ProjectDriveConfig {
 }
 
 export interface ProjectMember {
-  userId: string;
+  id: string;
   email: string;
   roleId: ProjectRole | string;
   rolePath?: string;
@@ -34,8 +34,11 @@ export interface Project {
   description?: string;
   clientName?: string;
   location?: string;
+  adminGoogleEmail?: string;
   status: ProjectStatus;
   drive: ProjectDriveConfig;
+  models?: unknown[];
+  modelsReadyCount?: number;
   createdAt?: unknown;
   updatedAt?: unknown;
   createdBy?: string;
@@ -86,11 +89,6 @@ export interface AuthenticatedUser {
   photoURL?: string;
   isSuperAdmin?: boolean;
   role?: string;
-}
-
-export interface AuthLoginPayload {
-  email: string;
-  password: string;
 }
 
 export interface AuthRefreshPayload {
@@ -176,14 +174,14 @@ export interface UpdateMemberRolePayload {
 
 export interface MemberMutationResponse {
   success: boolean;
-  userId: string;
+  id: string;
   email?: string;
   roleId: string;
 }
 
 export interface RemoveMemberResponse {
   success: boolean;
-  removedUserId: string;
+  removedMemberId: string;
 }
 
 export type ModelConversionStatus =
@@ -244,21 +242,23 @@ export interface UpdateSettingsPayload {
 export interface SuperAdminEntry {
   id: string;
   email?: string;
-  isSuperAdmin?: boolean;
+  uid?: string | null;
+  roleId?: string;
+  assignedAt?: unknown;
   assignedBy?: string;
   updatedAt?: unknown;
 }
 
 export interface AssignSuperAdminPayload {
   email: string;
-  isSuperAdmin: boolean;
+  isSuperAdmin?: boolean;
 }
 
 export interface AssignSuperAdminResponse {
   success: boolean;
   email: string;
-  userId: string;
-  isSuperAdmin: boolean;
+  userId?: string | null;
+  roleId: 'rolePermissions/superadmin' | 'rolePermissions/viewer';
 }
 
 export interface SyncDriveResponse {

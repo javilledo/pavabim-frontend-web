@@ -20,18 +20,25 @@ export interface ProjectRolePermissions {
 
 export function useProjectRole(): ProjectRolePermissions {
   const { user } = useAuth();
+  const projects = useViewerStore((state) => state.projects);
   const currentProject = useViewerStore((state) => state.currentProject);
+  const hasSuperAdminProjectRole = projects.some(
+    (project) => project.myRole === 'superadmin',
+  );
+  const isSuperAdmin =
+    Boolean(user?.isSuperAdmin) ||
+    currentProject?.myRole === 'superadmin' ||
+    hasSuperAdminProjectRole;
 
   let role: ResolvedRole = 'guest';
   if (currentProject?.myRole) {
     role = currentProject.myRole;
-  } else if (user?.isSuperAdmin) {
+  } else if (isSuperAdmin) {
     role = 'superadmin';
   } else if (user) {
     role = 'viewer';
   }
 
-  const isSuperAdmin = role === 'superadmin' || Boolean(user?.isSuperAdmin);
   const isAdmin = isSuperAdmin || role === 'admin';
   const isEditorOrHigher = isAdmin || role === 'editor';
 
