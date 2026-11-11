@@ -19,7 +19,7 @@ export interface ProjectRolePermissions {
 }
 
 export function useProjectRole(): ProjectRolePermissions {
-  const { user, isDemoMode } = useAuth();
+  const { user } = useAuth();
   const currentProject = useViewerStore((state) => state.currentProject);
 
   let role: ResolvedRole = 'guest';
@@ -27,7 +27,7 @@ export function useProjectRole(): ProjectRolePermissions {
     role = currentProject.myRole;
   } else if (user?.isSuperAdmin) {
     role = 'superadmin';
-  } else if (user && !isDemoMode) {
+  } else if (user) {
     role = 'viewer';
   }
 

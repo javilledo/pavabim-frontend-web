@@ -6,15 +6,13 @@ import { useLocalFragUpload } from '../../hooks/useLocalFragUpload';
 import { useProjectRole } from '../../hooks/useProjectRole';
 import { useViewerStore, type ActiveTool } from '../../store/useViewerStore';
 import { useEngine } from '../../viewer/EngineContext';
-import { AuthModal } from '../auth/AuthModal';
 import { ProjectManagementModal } from '../projects/ProjectManagementModal';
 
 export const RibbonToolbar: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
 
-  const { user, loading: authLoading, isDemoMode, logout } = useAuth();
+  const { user, loading: authLoading, logout } = useAuth();
   const { role } = useProjectRole();
   const { loadLocalFragFiles } = useLocalFragUpload();
 
@@ -42,7 +40,7 @@ export const RibbonToolbar: React.FC = () => {
   const projectsQuery = useQuery({
     queryKey: ['projects', user?.uid],
     queryFn: () => projectsService.listProjects(),
-    enabled: Boolean(user && !isDemoMode),
+    enabled: Boolean(user),
     retry: 1,
   });
 
@@ -53,10 +51,10 @@ export const RibbonToolbar: React.FC = () => {
   }, [projectsQuery.data, setProjects]);
 
   useEffect(() => {
-    if (!user || isDemoMode) {
+    if (!user) {
       resetProjectContext();
     }
-  }, [user, isDemoMode, resetProjectContext]);
+  }, [user, resetProjectContext]);
 
   const handleOpenLocalFrag = async (
     e: React.ChangeEvent<HTMLInputElement>,
@@ -104,15 +102,15 @@ export const RibbonToolbar: React.FC = () => {
 
           <div className="h-5 w-px bg-asphalt-700 hidden sm:block" />
 
-          {/* Project Selector or Standalone Local Pill */}
-          {user && !isDemoMode ? (
+          {/* Project Selector */}
+          {user && (
             <div className="flex items-center gap-1.5 min-w-0">
               <select
                 value={currentProject?.id || ''}
                 onChange={(e) => setCurrentProjectById(e.target.value || null)}
                 disabled={projectsQuery.isLoading}
                 className="max-w-[200px] truncate rounded border border-asphalt-700 bg-asphalt-900 px-2.5 py-1 text-xs text-asphalt-100 focus:border-pavasal-500 focus:outline-none"
-                title="Seleccionar proyecto activo o usar visor independiente"
+                title="Seleccionar proyecto activo o usar visor local sin proyecto"
               >
                 <option value="">Sin proyecto (visor local)</option>
                 {projectsQuery.isLoading ? (
@@ -137,11 +135,6 @@ export const RibbonToolbar: React.FC = () => {
                 Proyecto / Drive
               </button>
             </div>
-          ) : (
-            <span className="inline-flex items-center gap-1.5 rounded border border-asphalt-700 bg-asphalt-900 px-2 py-0.5 text-[11px] text-asphalt-300 hidden md:inline-flex">
-              <span className="w-1.5 h-1.5 rounded-full bg-pavasal-500" />
-              Visor independiente (.frag / .ifc local)
-            </span>
           )}
         </div>
 
@@ -246,11 +239,7 @@ export const RibbonToolbar: React.FC = () => {
                   {user.displayName || user.email}
                 </span>
                 <span className="text-[10px] text-pavasal-400 font-semibold uppercase">
-                  {isDemoMode
-                    ? 'Offline'
-                    : currentProject
-                      ? `Rol: ${role}`
-                      : 'Sin proyecto'}
+                  {currentProject ? `Rol: ${role}` : 'Modo local'}
                 </span>
               </div>
               <button
@@ -261,22 +250,10 @@ export const RibbonToolbar: React.FC = () => {
                 Salir
               </button>
             </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setIsAuthModalOpen(true)}
-              className="rounded bg-pavasal-500 px-3 py-1.5 text-xs font-bold text-asphalt-950 hover:bg-pavasal-400 transition-colors shadow-sm"
-            >
-              Iniciar sesión
-            </button>
-          )}
+          ) : null}
         </div>
       </header>
 
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-      />
       <ProjectManagementModal
         isOpen={isProjectModalOpen}
         onClose={() => setIsProjectModalOpen(false)}

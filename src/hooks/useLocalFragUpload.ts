@@ -2,16 +2,25 @@ import { useCallback } from 'react';
 import axios from 'axios';
 import { getApiErrorMessage } from '../api/client';
 import { modelsService } from '../api/models.service';
+import { useAuth } from '../auth/AuthProvider';
 import { useViewerStore } from '../store/useViewerStore';
 import { useEngine } from '../viewer/EngineContext';
 
 export function useLocalFragUpload() {
+  const { user } = useAuth();
   const { isEngineReady, loadModelFromBuffer } = useEngine();
   const { setModelLoading, setViewerToastError } = useViewerStore();
 
   const loadLocalFragFiles = useCallback(
     async (files: FileList | File[] | null | undefined) => {
       if (!files || files.length === 0 || !isEngineReady) return;
+
+      if (!user) {
+        setViewerToastError(
+          'Debes iniciar sesión con Firebase para cargar archivos .frag o .ifc.',
+        );
+        return;
+      }
 
       const fileArray = Array.from(files);
       const supportedFiles = fileArray.filter((f) => {
@@ -109,7 +118,13 @@ export function useLocalFragUpload() {
         }
       }
     },
-    [isEngineReady, loadModelFromBuffer, setModelLoading, setViewerToastError],
+    [
+      isEngineReady,
+      loadModelFromBuffer,
+      setModelLoading,
+      setViewerToastError,
+      user,
+    ],
   );
 
   return { isEngineReady, loadLocalFragFiles };

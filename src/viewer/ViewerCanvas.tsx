@@ -138,7 +138,7 @@ export const ViewerCanvas: React.FC = () => {
         </div>
       )}
 
-      {/* Empty Viewport Interactive CTA (works standalone without project/login) */}
+      {/* Empty Viewport Interactive CTA (works without selecting a project) */}
       {isEngineReady && loadedModels.length === 0 && !isDraggingFile && !isLoadingModel && (
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10">
           <div className="bg-asphalt-900/95 backdrop-blur border border-asphalt-700 px-4 py-2.5 rounded-xl text-xs text-asphalt-200 shadow-2xl flex items-center gap-3">

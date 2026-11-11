@@ -15,19 +15,18 @@ import {
 } from 'firebase/auth';
 import { useQueryClient } from '@tanstack/react-query';
 import { auth, googleProvider, isFirebaseConfigured } from './firebase.config';
+import { useViewerStore } from '../store/useViewerStore';
 import type { AuthenticatedUser } from '../types/api.types';
 
 interface AuthContextValue {
   user: AuthenticatedUser | null;
   loading: boolean;
   isConfigured: boolean;
-  isDemoMode: boolean;
   authError: string | null;
   login: () => Promise<void>;
   loginWithGoogle: () => Promise<void>;
   loginWithEmail: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
-  enterDemoMode: () => void;
   getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
   clearAuthError: () => void;
 }
@@ -60,7 +59,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   const queryClient = useQueryClient();
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [loading, setLoading] = useState<boolean>(isFirebaseConfigured);
-  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -73,7 +71,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
       if (fbUser) {
         const mapped = await mapFirebaseUser(fbUser);
         setUser(mapped);
-        setIsDemoMode(false);
       } else {
         setUser(null);
       }
@@ -87,22 +84,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
     setAuthError(null);
   }, []);
 
-  const enterDemoMode = useCallback(() => {
-    setAuthError(null);
-    setIsDemoMode(true);
-    setUser({
-      uid: 'offline-demo-user',
-      email: 'offline@pavabim.local',
-      displayName: 'Modo Local Offline',
-      role: 'viewer',
-    });
-  }, []);
-
   const loginWithGoogle = useCallback(async () => {
     setAuthError(null);
     if (!isFirebaseConfigured) {
-      enterDemoMode();
-      return;
+      const msg =
+        'Firebase Web no está configurado en .env. Define las variables VITE_FIREBASE_* para iniciar sesión.';
+      setAuthError(msg);
+      throw new Error(msg);
     }
 
     try {
@@ -122,16 +110,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
       setAuthError(message);
       throw err;
     }
-  }, [enterDemoMode]);
+  }, []);
 
   const loginWithEmail = useCallback(
     async (email: string, password: string) => {
       setAuthError(null);
       if (!isFirebaseConfigured) {
-        setAuthError(
-          'Firebase no está configurado en .env. Usa el modo offline o configura las variables VITE_FIREBASE_*.',
-        );
-        return;
+        const msg =
+          'Firebase Web no está configurado en .env. Define las variables VITE_FIREBASE_* para iniciar sesión.';
+        setAuthError(msg);
+        throw new Error(msg);
       }
 
       try {
@@ -150,11 +138,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
 
   const logout = useCallback(async () => {
     setAuthError(null);
-    setIsDemoMode(false);
     if (isFirebaseConfigured && auth.currentUser) {
       await signOut(auth);
     }
     setUser(null);
+    useViewerStore.getState().clearLoadedModels();
+    useViewerStore.getState().resetProjectContext();
     queryClient.clear();
   }, [queryClient]);
 
@@ -169,13 +158,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
         user,
         loading,
         isConfigured: isFirebaseConfigured,
-        isDemoMode,
         authError,
         login: loginWithGoogle,
         loginWithGoogle,
         loginWithEmail,
         logout,
-        enterDemoMode,
         getIdToken,
         clearAuthError,
       }}

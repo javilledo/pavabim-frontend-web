@@ -21,7 +21,7 @@ const STATUS_BADGE: Record<ModelStatusResponse['status'], string> = {
 export const ModelsPanel: React.FC = () => {
   const localInputRef = useRef<HTMLInputElement | null>(null);
   const queryClient = useQueryClient();
-  const { user, isDemoMode } = useAuth();
+  const { user } = useAuth();
   const { canManageModels, canSyncDrive } = useProjectRole();
   const { loadLocalFragFiles } = useLocalFragUpload();
   const {
@@ -48,7 +48,7 @@ export const ModelsPanel: React.FC = () => {
   const modelsQuery = useQuery({
     queryKey: ['models', projectId],
     queryFn: () => modelsService.listProjectModels(projectId),
-    enabled: Boolean(user && !isDemoMode && projectId),
+    enabled: Boolean(user && projectId),
     refetchInterval: (query) => {
       const items = query.state.data;
       return Array.isArray(items) && items.some((m) => m.status === 'PROCESSING')
@@ -240,7 +240,7 @@ export const ModelsPanel: React.FC = () => {
       </section>
 
       {/* Remote Project Models from Google Drive / Backend */}
-      {user && !isDemoMode && currentProject && (
+      {user && currentProject && (
         <section className="space-y-2 pt-3 border-t border-asphalt-700">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-[11px] font-semibold uppercase tracking-wider text-pavasal-400">

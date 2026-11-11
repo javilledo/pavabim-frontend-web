@@ -119,7 +119,7 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 
 export const BcfIssuesPanel: React.FC = () => {
   const queryClient = useQueryClient();
-  const { user, isDemoMode } = useAuth();
+  const { user } = useAuth();
   const { canEditBcf } = useProjectRole();
   const {
     currentProject,
@@ -139,7 +139,7 @@ export const BcfIssuesPanel: React.FC = () => {
   } = useEngine();
 
   const projectId = currentProject?.id || '';
-  const isRemoteReady = Boolean(user && !isDemoMode && projectId);
+  const isRemoteReady = Boolean(user && projectId);
 
   const [isCreating, setIsCreating] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -411,9 +411,9 @@ export const BcfIssuesPanel: React.FC = () => {
           </p>
           <p className="text-[11px] text-asphalt-300 leading-relaxed">
             Sin proyecto activo puedes guardar puntos de vista 3D y descargar
-            capturas PNG de tus archivos <code className="text-pavasal-400">.frag</code>.
-            Para sincronizar incidencias BCF 3.0 en equipo, inicia sesión y
-            elige un proyecto.
+            capturas PNG de tus archivos <code className="text-pavasal-400">.frag</code> o{' '}
+            <code className="text-pavasal-400">.ifc</code>. Para sincronizar
+            incidencias BCF 3.0 en equipo, selecciona un proyecto.
           </p>
         </div>
 
