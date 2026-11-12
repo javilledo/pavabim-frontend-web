@@ -78,6 +78,7 @@ export interface RoleDefinition {
   id: string;
   name: string;
   description?: string;
+  priority?: number;
   permissions?: string[];
   [key: string]: unknown;
 }
@@ -192,6 +193,11 @@ export interface ModelStatusResponse {
   jsonFileId?: string;
   error?: string;
   updatedAt?: string;
+  fragModifiedTime?: string;
+  ifcModifiedTime?: string;
+  ifcUpdatedAt?: string;
+  needsReconversion?: boolean;
+  isOutdated?: boolean;
 }
 
 export type ModelMetadata = ModelStatusResponse;

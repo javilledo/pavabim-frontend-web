@@ -2,7 +2,14 @@ import { create } from 'zustand';
 import type { ModelStatusResponse, ProjectWithRole } from '../types/api.types';
 import type { CameraViewpointData } from '../types/bcf.types';
 
-export type ActiveTool = 'orbit' | 'select' | 'pan' | 'measure' | 'section';
+export type ActiveTool =
+  | 'orbit'
+  | 'select'
+  | 'pan'
+  | 'measure'
+  | 'section'
+  | 'coordinates';
+export type MeasureMode = 'length' | 'area' | 'volume';
 export type CameraProjectionMode = 'Perspective' | 'Orthographic';
 
 export interface LoadedModel {
@@ -11,6 +18,8 @@ export interface LoadedModel {
   visible: boolean;
   source?: 'local' | 'remote';
   ifcFileId?: string;
+  fragModifiedTime?: string;
+  projectId?: string;
   downloadUrl?: string;
 }
 
@@ -47,6 +56,7 @@ function saveProjectId(projectId: string | null): void {
 interface ViewerState {
   // Navigation & Viewer Tools
   activeTool: ActiveTool;
+  measureMode: MeasureMode;
   cameraProjection: CameraProjectionMode;
   isGridVisible: boolean;
   isSectionActive: boolean;
@@ -59,6 +69,9 @@ interface ViewerState {
   selectedElementId: string | null;
   selectedModelId: string | null;
   selectedElementProperties: Record<string, unknown> | null;
+  selectedElementsMap: Record<string, number[]>;
+  hiddenElementsMap: Record<string, number[]>;
+  isIsolationActive: boolean;
   localViewpoints: LocalViewpoint[];
 
   // Backend Project & BCF Context
@@ -70,20 +83,32 @@ interface ViewerState {
 
   // Actions
   setActiveTool: (tool: ActiveTool) => void;
+  setMeasureMode: (mode: MeasureMode) => void;
   setCameraProjection: (projection: CameraProjectionMode) => void;
   toggleGrid: () => void;
   toggleSection: () => void;
+  setSectionActive: (active: boolean) => void;
   setModelLoading: (loading: boolean, modelName?: string | null) => void;
   setViewerToastError: (error: string | null) => void;
   addLoadedModel: (model: LoadedModel) => void;
   removeLoadedModel: (modelId: string) => void;
   clearLoadedModels: () => void;
   toggleModelVisibility: (modelId: string) => void;
+  showAllModels: () => void;
   setSelectedElement: (
     elementId: string | null,
     modelId: string | null,
     properties?: Record<string, unknown> | null,
   ) => void;
+  setSelectedElements: (
+    selection: Record<string, number[]>,
+    primaryElementId?: string | null,
+    primaryModelId?: string | null,
+    properties?: Record<string, unknown> | null,
+  ) => void;
+  addHiddenElements: (items: Record<string, number[]>) => void;
+  setIsolationActive: (active: boolean) => void;
+  clearHiddenElements: () => void;
   addLocalViewpoint: (vp: LocalViewpoint) => void;
   removeLocalViewpoint: (id: string) => void;
 
@@ -97,6 +122,7 @@ interface ViewerState {
 
 export const useViewerStore = create<ViewerState>((set, get) => ({
   activeTool: 'select',
+  measureMode: 'length',
   cameraProjection: 'Perspective',
   isGridVisible: true,
   isSectionActive: false,
@@ -108,6 +134,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   selectedElementId: null,
   selectedModelId: null,
   selectedElementProperties: null,
+  selectedElementsMap: {},
+  hiddenElementsMap: {},
+  isIsolationActive: false,
   localViewpoints: [],
 
   projects: [],
@@ -118,12 +147,16 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
 
   setActiveTool: (tool) => set({ activeTool: tool }),
 
+  setMeasureMode: (measureMode) => set({ measureMode }),
+
   setCameraProjection: (cameraProjection) => set({ cameraProjection }),
 
   toggleGrid: () => set((state) => ({ isGridVisible: !state.isGridVisible })),
 
   toggleSection: () =>
     set((state) => ({ isSectionActive: !state.isSectionActive })),
+
+  setSectionActive: (isSectionActive) => set({ isSectionActive }),
 
   setModelLoading: (isLoadingModel, loadingModelName = null) =>
     set({ isLoadingModel, loadingModelName }),
@@ -149,8 +182,14 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       if (target?.downloadUrl) {
         URL.revokeObjectURL(target.downloadUrl);
       }
+      const nextSelection = { ...state.selectedElementsMap };
+      delete nextSelection[modelId];
+      const nextHidden = { ...state.hiddenElementsMap };
+      delete nextHidden[modelId];
       return {
         loadedModels: state.loadedModels.filter((m) => m.id !== modelId),
+        selectedElementsMap: nextSelection,
+        hiddenElementsMap: nextHidden,
         selectedElementId:
           state.selectedModelId === modelId ? null : state.selectedElementId,
         selectedModelId:
@@ -171,6 +210,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       }
       return {
         loadedModels: [],
+        selectedElementsMap: {},
+        hiddenElementsMap: {},
+        isIsolationActive: false,
         selectedElementId: null,
         selectedModelId: null,
         selectedElementProperties: null,
@@ -184,12 +226,56 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       ),
     })),
 
-  setSelectedElement: (elementId, modelId, properties = null) =>
+  showAllModels: () =>
+    set((state) => ({
+      loadedModels: state.loadedModels.map((m) =>
+        m.visible ? m : { ...m, visible: true },
+      ),
+    })),
+
+  setSelectedElement: (elementId, modelId, properties = null) => {
+    const parsedId = elementId !== null ? Number(elementId) : NaN;
+    const nextMap: Record<string, number[]> =
+      elementId && modelId && Number.isFinite(parsedId)
+        ? { [modelId]: [parsedId] }
+        : {};
     set({
       selectedElementId: elementId,
       selectedModelId: modelId,
       selectedElementProperties: properties,
+      selectedElementsMap: nextMap,
+    });
+  },
+
+  setSelectedElements: (
+    selection,
+    primaryElementId = null,
+    primaryModelId = null,
+    properties = null,
+  ) =>
+    set({
+      selectedElementsMap: selection,
+      selectedElementId: primaryElementId,
+      selectedModelId: primaryModelId,
+      selectedElementProperties: properties,
     }),
+
+  addHiddenElements: (items) =>
+    set((state) => {
+      const nextHidden: Record<string, number[]> = { ...state.hiddenElementsMap };
+      for (const [modelId, ids] of Object.entries(items)) {
+        if (!ids || ids.length === 0) continue;
+        const merged = new Set(nextHidden[modelId] ?? []);
+        for (const id of ids) merged.add(id);
+        nextHidden[modelId] = Array.from(merged);
+      }
+      return { hiddenElementsMap: nextHidden };
+    }),
+
+  setIsolationActive: (isIsolationActive) => set({ isIsolationActive }),
+
+  clearHiddenElements: () =>
+    set({ hiddenElementsMap: {}, isIsolationActive: false }),
 
   addLocalViewpoint: (vp) =>
     set((state) => ({

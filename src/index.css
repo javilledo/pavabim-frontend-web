@@ -5,9 +5,9 @@
 :root {
   --pavasal-yellow: #ffc72c;
   --pavasal-yellow-hover: #ffd653;
-  --pavasal-black: #0b0b0d;
-  --pavasal-surface: #141417;
-  --pavasal-border: #2a2b30;
+  --pavasal-black: #121212;
+  --pavasal-surface: #1e1e1e;
+  --pavasal-border: #34373f;
 }
 
 html,
@@ -36,11 +36,11 @@ body,
 }
 
 ::-webkit-scrollbar-track {
-  background: #0b0b0d;
+  background: #121212;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2a2b30;
+  background: #34373f;
   border-radius: 3px;
 }
 

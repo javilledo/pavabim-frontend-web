@@ -12,8 +12,13 @@ const formatValue = (val: unknown): string => {
 };
 
 export const PropertiesInspector: React.FC = () => {
-  const { selectedElementId, selectedModelId, selectedElementProperties } =
-    useViewerStore();
+  const {
+    loadedModels,
+    selectedElementId,
+    selectedModelId,
+    selectedElementProperties,
+    selectedElementsMap,
+  } = useViewerStore();
   const { clearSelection, focusElement } = useEngine();
 
   if (!selectedElementId) {
@@ -21,12 +26,24 @@ export const PropertiesInspector: React.FC = () => {
       <div className="text-center text-xs text-asphalt-300 mt-8 px-4">
         <p className="font-semibold text-asphalt-100">Inspector de Elementos</p>
         <p className="mt-1.5 text-asphalt-400 leading-relaxed">
-          Haz clic en cualquier elemento 3D o selecciona un nodo del Árbol
-          Espacial para consultar sus propiedades IFC.
+          Haz clic en cualquier elemento 3D o selecciona un elemento en la
+          pestaña Elementos para consultar sus propiedades IFC.
         </p>
       </div>
     );
   }
+
+  const modelNameById = new Map(loadedModels.map((m) => [m.id, m.name]));
+  const selectedModelName = selectedModelId
+    ? modelNameById.get(selectedModelId) ?? selectedModelId
+    : null;
+  const selectedModelNames = Object.entries(selectedElementsMap)
+    .filter(([, ids]) => ids.length > 0)
+    .map(([modelId, ids]) => ({
+      modelId,
+      name: modelNameById.get(modelId) ?? modelId,
+      count: ids.length,
+    }));
 
   const entries = selectedElementProperties
     ? Object.entries(selectedElementProperties)
@@ -66,12 +83,35 @@ export const PropertiesInspector: React.FC = () => {
         <div className="mt-2 font-mono text-sm text-white">
           Local ID: #{selectedElementId}
         </div>
-        {selectedModelId && (
+        {selectedModelId && selectedModelName && (
           <div
-            className="mt-0.5 text-[11px] text-asphalt-400 truncate"
-            title={selectedModelId}
+            className="mt-1.5 flex items-center gap-1.5 text-[11px] min-w-0"
+            title={
+              selectedModelName !== selectedModelId
+                ? `${selectedModelName} (${selectedModelId})`
+                : selectedModelId
+            }
           >
-            Modelo: {selectedModelId}
+            <span className="text-asphalt-400 shrink-0">Modelo:</span>
+            <span className="font-medium text-asphalt-100 truncate">
+              {selectedModelName}
+            </span>
+          </div>
+        )}
+        {selectedModelNames.length > 1 && (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {selectedModelNames.map((entry) => (
+              <span
+                key={entry.modelId}
+                className="inline-flex items-center gap-1 rounded bg-asphalt-900/90 border border-asphalt-700 px-1.5 py-0.5 text-[10px] text-asphalt-200 max-w-full"
+                title={`${entry.name} (${entry.count})`}
+              >
+                <span className="truncate">{entry.name}</span>
+                <span className="font-mono text-asphalt-400 shrink-0">
+                  ({entry.count})
+                </span>
+              </span>
+            ))}
           </div>
         )}
       </div>

@@ -4,6 +4,24 @@ import type {
   ModelStatusResponse,
 } from '../types/api.types';
 
+export interface TriggerConversionOptions {
+  force?: boolean;
+}
+
+export function isModelOutdated(model: ModelStatusResponse): boolean {
+  if (model.needsReconversion || model.isOutdated) {
+    return true;
+  }
+  const ifcRaw = model.ifcModifiedTime ?? model.ifcUpdatedAt;
+  const fragRaw = model.fragModifiedTime ?? model.updatedAt;
+  if (!ifcRaw || !fragRaw) {
+    return false;
+  }
+  const ifcMs = Date.parse(ifcRaw);
+  const fragMs = Date.parse(fragRaw);
+  return Number.isFinite(ifcMs) && Number.isFinite(fragMs) && ifcMs > fragMs;
+}
+
 export const modelsService = {
   async listProjectModels(projectId: string): Promise<ModelStatusResponse[]> {
     const { data } = await apiClient.get<ModelStatusResponse[]>(
@@ -15,11 +33,16 @@ export const modelsService = {
   async triggerConversion(
     projectId: string,
     modelName: string,
+    options?: TriggerConversionOptions,
   ): Promise<ModelStatusResponse> {
+    const force = Boolean(options?.force);
     const { data } = await apiClient.post<ModelStatusResponse>(
       `/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelName)}/convert`,
-      undefined,
-      { timeout: 180000 },
+      force ? { force: true } : undefined,
+      {
+        params: force ? { force: true } : undefined,
+        timeout: 180000,
+      },
     );
     return data;
   },
@@ -27,10 +50,13 @@ export const modelsService = {
   async fetchFragBinary(
     projectId: string,
     modelName: string,
+    cacheVersion?: string,
   ): Promise<ArrayBuffer> {
+    const normalizedVersion = cacheVersion?.trim() || undefined;
     const { data } = await apiClient.get<ArrayBuffer>(
       `/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelName)}/frag`,
       {
+        params: normalizedVersion ? { v: normalizedVersion } : undefined,
         responseType: 'arraybuffer',
         timeout: 180000,
       },
@@ -41,10 +67,15 @@ export const modelsService = {
   async fetchPropertiesJson(
     projectId: string,
     modelName: string,
+    cacheVersion?: string,
   ): Promise<ModelPropertiesDocument> {
+    const normalizedVersion = cacheVersion?.trim() || undefined;
     const { data } = await apiClient.get<ModelPropertiesDocument>(
       `/projects/${encodeURIComponent(projectId)}/models/${encodeURIComponent(modelName)}/properties`,
-      { timeout: 60000 },
+      {
+        params: normalizedVersion ? { v: normalizedVersion } : undefined,
+        timeout: 60000,
+      },
     );
     return data;
   },

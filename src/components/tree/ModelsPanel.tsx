@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { getApiErrorMessage } from '../../api/client';
-import { modelsService } from '../../api/models.service';
+import { isModelOutdated, modelsService } from '../../api/models.service';
 import { projectsService } from '../../api/projects.service';
 import { useAuth } from '../../auth/AuthProvider';
+import { useProjectModelsQuery } from '../../hooks/useAutoConvertProjectModels';
 import { useProjectRole } from '../../hooks/useProjectRole';
 import { useViewerStore } from '../../store/useViewerStore';
 import type { ModelStatusResponse } from '../../types/api.types';
@@ -47,17 +48,7 @@ export const ModelsPanel: React.FC = () => {
 
   const projectId = currentProject?.id || '';
 
-  const modelsQuery = useQuery({
-    queryKey: ['models', projectId],
-    queryFn: () => modelsService.listProjectModels(projectId),
-    enabled: Boolean(user && projectId),
-    refetchInterval: (query) => {
-      const items = query.state.data;
-      return Array.isArray(items) && items.some((m) => m.status === 'PROCESSING')
-        ? 4000
-        : false;
-    },
-  });
+  const modelsQuery = useProjectModelsQuery(projectId);
 
   useEffect(() => {
     if (modelsQuery.data) {
@@ -66,8 +57,8 @@ export const ModelsPanel: React.FC = () => {
   }, [modelsQuery.data, setRemoteModels]);
 
   const convertMutation = useMutation({
-    mutationFn: (modelName: string) =>
-      modelsService.triggerConversion(projectId, modelName),
+    mutationFn: ({ modelName, force }: { modelName: string; force?: boolean }) =>
+      modelsService.triggerConversion(projectId, modelName, { force }),
     onSuccess: () => {
       setActionError(null);
       queryClient.invalidateQueries({ queryKey: ['models', projectId] });
@@ -88,12 +79,24 @@ export const ModelsPanel: React.FC = () => {
     if (!projectId || !isEngineReady) return;
     setLoadingModelKey(model.modelName);
     try {
+      const cacheVersion = model.fragModifiedTime || undefined;
       const buffer = await modelsService.fetchFragBinary(
         projectId,
         model.modelName,
+        cacheVersion,
       );
       const modelId = model.ifcFileId || model.modelName;
-      await loadModelFromBuffer(buffer, modelId, model.modelName, 'remote');
+      await loadModelFromBuffer(
+        buffer,
+        modelId,
+        model.modelName,
+        'remote',
+        undefined,
+        {
+          fragModifiedTime: model.fragModifiedTime,
+          projectId,
+        },
+      );
     } finally {
       setLoadingModelKey(null);
     }
@@ -111,16 +114,25 @@ export const ModelsPanel: React.FC = () => {
     }
   };
 
+  const projectModels = useMemo(() => {
+    const raw = modelsQuery.data || [];
+    return [...raw].sort((a, b) =>
+      a.modelName.localeCompare(b.modelName, 'es', {
+        numeric: true,
+        sensitivity: 'base',
+      }),
+    );
+  }, [modelsQuery.data]);
+
   if (!user || !currentProject) {
     return (
       <div className="rounded border border-asphalt-800 bg-asphalt-950/50 p-3 text-center text-[11px] text-asphalt-400 leading-relaxed">
         Selecciona un proyecto en la barra superior para ver los modelos de su
-        carpeta, o usa <span className="text-pavasal-400 font-medium">+ .frag / .ifc local</span> arriba.
+        carpeta, o arrastra archivos <span className="text-pavasal-400 font-medium">.frag / .ifc</span> al visor.
       </div>
     );
   }
 
-  const projectModels = modelsQuery.data || [];
   const readyModels = projectModels.filter((m) => m.status === 'READY');
   const pendingReadyModels = readyModels.filter((m) => {
     const targetId = m.ifcFileId || m.modelName;
@@ -288,31 +300,39 @@ export const ModelsPanel: React.FC = () => {
             const isLoaded = Boolean(loadedModel);
             const isVisible = loadedModel?.visible ?? false;
             const isLoadingThis = loadingModelKey === model.modelName;
+            const isOutdated = isModelOutdated(model);
             const isConvertingThis =
               model.status === 'PROCESSING' ||
               (convertMutation.isPending &&
-                convertMutation.variables === model.modelName);
+                convertMutation.variables?.modelName === model.modelName);
             const canConvert =
-              (model.status === 'NOT_CONVERTED' || model.status === 'FAILED') &&
+              model.status !== 'PROCESSING' &&
               canManageModels &&
-              !convertMutation.isPending;
+              !isConvertingThis;
             const canLoadOrUnload =
               isEngineReady &&
               batchProgress === null &&
               !isLoadingThis &&
               (isLoaded || model.status === 'READY');
 
-            const statusInfo = STATUS_DOT[model.status];
+            const statusInfo = isOutdated
+              ? {
+                  color: 'bg-amber-400',
+                  label: 'IFC más reciente que .frag (requiere reconversión)',
+                }
+              : STATUS_DOT[model.status];
 
             const convertTitle = isConvertingThis
               ? 'Convirtiendo IFC a .frag...'
-              : model.status === 'READY'
-                ? 'Ya convertido a .frag'
-                : !canManageModels
-                  ? 'Sin permisos para convertir'
-                  : model.status === 'FAILED'
-                    ? 'Reintentar conversión IFC → .frag'
-                    : 'Convertir IFC a .frag';
+              : !canManageModels
+                ? 'Sin permisos para convertir'
+                : model.status === 'FAILED'
+                  ? 'Reintentar conversión IFC → .frag'
+                  : isOutdated
+                    ? 'IFC más reciente detectado: reconvertir a .frag'
+                    : model.status === 'READY'
+                      ? 'Forzar nueva conversión IFC → .frag'
+                      : 'Convertir IFC a .frag';
 
             const loadTitle = isLoadingThis
               ? 'Cargando modelo en el visor...'
@@ -409,23 +429,34 @@ export const ModelsPanel: React.FC = () => {
                       )}
                     </button>
 
-                    {/* Convert IFC -> FRAG */}
+                    {/* Convert / Force Reconvert IFC -> FRAG */}
                     <button
                       type="button"
                       disabled={!canConvert}
-                      onClick={() => convertMutation.mutate(model.modelName)}
-                      aria-label={`Convertir ${model.modelName} de IFC a FRAG`}
+                      onClick={() =>
+                        convertMutation.mutate({
+                          modelName: model.modelName,
+                          force: model.status === 'READY' || isOutdated,
+                        })
+                      }
+                      aria-label={
+                        model.status === 'READY'
+                          ? `Forzar reconversión de ${model.modelName} de IFC a FRAG`
+                          : `Convertir ${model.modelName} de IFC a FRAG`
+                      }
                       title={convertTitle}
                       className={`p-1 rounded border transition-colors ${
                         isConvertingThis
                           ? 'border-pavasal-500/50 bg-pavasal-500/15 text-pavasal-400 cursor-wait'
                           : canConvert && model.status === 'FAILED'
                             ? 'border-red-700/70 bg-red-950/60 text-red-300 hover:bg-red-500 hover:text-white'
-                            : canConvert
-                              ? 'border-pavasal-500/70 bg-pavasal-500/10 text-pavasal-400 hover:bg-pavasal-500 hover:text-asphalt-950'
-                              : model.status === 'READY'
-                                ? 'border-emerald-800/60 bg-emerald-950/40 text-emerald-400/70 cursor-default'
-                                : 'border-transparent text-asphalt-500 opacity-35 cursor-not-allowed'
+                            : canConvert && isOutdated
+                              ? 'border-amber-500/80 bg-amber-500/15 text-amber-300 hover:bg-amber-500 hover:text-asphalt-950'
+                              : canConvert && model.status === 'READY'
+                                ? 'border-emerald-700/70 bg-emerald-950/40 text-emerald-300 hover:border-pavasal-500 hover:bg-pavasal-500 hover:text-asphalt-950'
+                                : canConvert
+                                  ? 'border-pavasal-500/70 bg-pavasal-500/10 text-pavasal-400 hover:bg-pavasal-500 hover:text-asphalt-950'
+                                  : 'border-transparent text-asphalt-500 opacity-35 cursor-not-allowed'
                       }`}
                     >
                       {isConvertingThis ? (

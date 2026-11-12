@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getApiErrorMessage } from '../../api/client';
 import { driveService } from '../../api/drive.service';
@@ -8,16 +8,18 @@ import { useProjectRole } from '../../hooks/useProjectRole';
 import { useViewerStore } from '../../store/useViewerStore';
 import type { ProjectRole } from '../../types/api.types';
 
+export type ProjectManagementTab = 'overview' | 'members' | 'create' | 'settings';
+
 interface ProjectManagementModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: ProjectManagementTab;
 }
-
-type ModalTab = 'overview' | 'members' | 'create' | 'settings';
 
 export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
   isOpen,
   onClose,
+  initialTab,
 }) => {
   const queryClient = useQueryClient();
   const { currentProject, setCurrentProject } = useViewerStore();
@@ -30,9 +32,27 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
     canSyncDrive,
   } = useProjectRole();
 
-  const [tab, setTab] = useState<ModalTab>(
-    currentProject ? 'overview' : 'create',
+  const [tab, setTab] = useState<ProjectManagementTab>(
+    currentProject ? 'overview' : canCreateProject ? 'create' : 'overview',
   );
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const isRequestedTabAllowed =
+      (initialTab === 'overview') ||
+      (initialTab === 'members' && Boolean(currentProject)) ||
+      (initialTab === 'create' && canCreateProject) ||
+      (initialTab === 'settings' && isSuperAdmin);
+
+    if (initialTab && isRequestedTabAllowed) {
+      setTab(initialTab);
+      return;
+    }
+
+    setTab(
+      currentProject ? 'overview' : canCreateProject ? 'create' : 'overview',
+    );
+  }, [isOpen, initialTab, currentProject, canCreateProject, isSuperAdmin]);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -60,6 +80,38 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
     queryFn: () => projectsService.listMembers(projectId),
     enabled: isOpen && Boolean(projectId) && tab === 'members',
   });
+
+  const rolesQuery = useQuery({
+    queryKey: ['project-roles'],
+    queryFn: () => projectsService.getAvailableRoles(),
+    enabled: isOpen && tab === 'members',
+  });
+
+  const projectRoles = useMemo(() => {
+    const raw = rolesQuery.data || [];
+    const filtered = raw.filter(
+      (r) => r.id.trim().toLowerCase() !== 'superadmin',
+    );
+    return [...filtered].sort(
+      (a, b) => (a.priority ?? 999) - (b.priority ?? 999),
+    );
+  }, [rolesQuery.data]);
+
+  const roleLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of projectRoles) {
+      map.set(r.id.toLowerCase(), r.name || r.id);
+    }
+    return map;
+  }, [projectRoles]);
+
+  useEffect(() => {
+    if (projectRoles.length === 0) return;
+    const exists = projectRoles.some((r) => r.id === memberRole);
+    if (!exists) {
+      setMemberRole((projectRoles[0].id as ProjectRole) || 'editor');
+    }
+  }, [projectRoles, memberRole]);
 
   const settingsQuery = useQuery({
     queryKey: ['app-settings'],
@@ -136,7 +188,9 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
       }),
     onSuccess: () => {
       setErrorMsg(null);
-      setFeedback(`Miembro ${memberEmail} añadido como ${memberRole}.`);
+      const roleLabel =
+        roleLabelById.get(memberRole.toLowerCase()) || memberRole;
+      setFeedback(`Miembro ${memberEmail} añadido como ${roleLabel}.`);
       setMemberEmail('');
       queryClient.invalidateQueries({ queryKey: ['project-members', projectId] });
       queryClient.invalidateQueries({ queryKey: ['project-summary', projectId] });
@@ -443,11 +497,20 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
                     onChange={(e) =>
                       setMemberRole(e.target.value as ProjectRole)
                     }
-                    className="rounded border border-asphalt-700 bg-asphalt-800 px-2 py-1.5 text-white focus:border-pavasal-500 focus:outline-none"
+                    disabled={projectRoles.length === 0 && rolesQuery.isLoading}
+                    className="rounded border border-asphalt-700 bg-asphalt-800 px-2 py-1.5 text-white focus:border-pavasal-500 focus:outline-none disabled:opacity-50"
                   >
-                    <option value="viewer">Viewer</option>
-                    <option value="editor">Editor</option>
-                    <option value="admin">Admin</option>
+                    {projectRoles.length > 0 ? (
+                      projectRoles.map((roleOption) => (
+                        <option key={roleOption.id} value={roleOption.id}>
+                          {roleOption.name || roleOption.id}
+                        </option>
+                      ))
+                    ) : (
+                      <option value={memberRole}>
+                        {rolesQuery.isLoading ? 'Cargando roles...' : memberRole}
+                      </option>
+                    )}
                   </select>
                   <button
                     type="submit"
@@ -475,7 +538,11 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
                             {member.email}
                           </div>
                           <div className="text-[10px] text-asphalt-400">
-                            {member.roleName || member.id}
+                            {member.roleName ||
+                              roleLabelById.get(
+                                String(member.roleId || '').toLowerCase(),
+                              ) ||
+                              member.id}
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
@@ -491,9 +558,29 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
                                 }
                                 className="rounded border border-asphalt-700 bg-asphalt-800 px-2 py-1 text-[11px] text-white"
                               >
-                                <option value="viewer">viewer</option>
-                                <option value="editor">editor</option>
-                                <option value="admin">admin</option>
+                                {projectRoles.length > 0 ? (
+                                  <>
+                                    {!projectRoles.some(
+                                      (r) => r.id === member.roleId,
+                                    ) && (
+                                      <option value={member.roleId}>
+                                        {member.roleName || member.roleId}
+                                      </option>
+                                    )}
+                                    {projectRoles.map((roleOption) => (
+                                      <option
+                                        key={roleOption.id}
+                                        value={roleOption.id}
+                                      >
+                                        {roleOption.name || roleOption.id}
+                                      </option>
+                                    ))}
+                                  </>
+                                ) : (
+                                  <option value={member.roleId}>
+                                    {member.roleName || member.roleId}
+                                  </option>
+                                )}
                               </select>
                               <button
                                 type="button"
@@ -507,7 +594,11 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
                             </>
                           ) : (
                             <span className="rounded bg-asphalt-800 px-2 py-0.5 text-[11px] text-pavasal-400">
-                              {member.roleId}
+                              {member.roleName ||
+                                roleLabelById.get(
+                                  String(member.roleId || '').toLowerCase(),
+                                ) ||
+                                member.roleId}
                             </span>
                           )}
                         </div>

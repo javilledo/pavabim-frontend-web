@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { SpatialTreePanel } from '../tree/SpatialTreePanel';
+import { ElementsTreePanel } from '../tree/ElementsTreePanel';
 import { ModelsPanel } from '../tree/ModelsPanel';
 import { ResizableSidebar } from './ResizableSidebar';
 
 export const LeftSidebar: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'models' | 'tree'>('models');
+  const [activeTab, setActiveTab] = useState<'models' | 'elements'>('models');
 
   return (
     <ResizableSidebar
@@ -24,19 +24,19 @@ export const LeftSidebar: React.FC = () => {
           Modelos
         </button>
         <button
-          onClick={() => setActiveTab('tree')}
+          onClick={() => setActiveTab('elements')}
           className={`flex-1 py-1.5 text-xs font-medium text-center rounded transition-colors ${
-            activeTab === 'tree'
+            activeTab === 'elements'
               ? 'bg-pavasal-500 text-asphalt-950 font-semibold shadow-sm'
               : 'text-asphalt-300 hover:text-white hover:bg-asphalt-800'
           }`}
         >
-          Árbol Espacial
+          Elementos
         </button>
       </div>
 
       <div className="flex-1 p-3 overflow-y-auto">
-        {activeTab === 'models' ? <ModelsPanel /> : <SpatialTreePanel />}
+        {activeTab === 'models' ? <ModelsPanel /> : <ElementsTreePanel />}
       </div>
     </ResizableSidebar>
   );
