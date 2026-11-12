@@ -1,12 +1,17 @@
 import React, { useState } from 'react';
 import { PropertiesInspector } from '../inspector/PropertiesInspector';
 import { BcfIssuesPanel } from '../bcf/BcfIssuesPanel';
+import { ResizableSidebar } from './ResizableSidebar';
 
 export const RightSidebar: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'inspector' | 'bcf'>('inspector');
 
   return (
-    <aside className="w-[300px] flex-shrink-0 bg-asphalt-900 text-asphalt-100 border-l border-asphalt-700 flex flex-col select-none">
+    <ResizableSidebar
+      side="right"
+      storageKey="pavabim_right_sidebar_width"
+      ariaLabel="Ajustar ancho del panel derecho"
+    >
       <div className="h-10 border-b border-asphalt-700 flex items-center px-2 bg-asphalt-950 space-x-1">
         <button
           onClick={() => setActiveTab('inspector')}
@@ -33,7 +38,7 @@ export const RightSidebar: React.FC = () => {
       <div className="flex-1 p-3 overflow-y-auto">
         {activeTab === 'inspector' ? <PropertiesInspector /> : <BcfIssuesPanel />}
       </div>
-    </aside>
+    </ResizableSidebar>
   );
 };
 

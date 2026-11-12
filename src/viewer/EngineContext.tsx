@@ -13,7 +13,7 @@ import * as OBCF from '@thatopen/components-front';
 import * as FRAGS from '@thatopen/fragments';
 import '@thatopen/fragments/inline';
 import CameraControls from 'camera-controls';
-import { useViewerStore } from '../store/useViewerStore';
+import { useViewerStore, type CameraProjectionMode } from '../store/useViewerStore';
 import type { CameraViewpointData } from '../types/bcf.types';
 
 export interface EngineContextValue {
@@ -35,6 +35,7 @@ export interface EngineContextValue {
   toggleModelVisibility: (modelId: string, visible: boolean) => void;
   removeModel: (modelId: string) => Promise<void>;
   fitCameraToModels: () => Promise<void>;
+  setPlanView: () => Promise<void>;
   focusElement: (modelId: string, localId: number) => Promise<void>;
   clearSelection: () => Promise<void>;
   captureSnapshotBlob: () => Promise<Blob | null>;
@@ -43,14 +44,138 @@ export interface EngineContextValue {
   toggleGridVisibility: (visible?: boolean) => void;
   toggleSectionBox: () => void;
   clearMeasurements: () => void;
+  setCameraProjection: (projection: CameraProjectionMode) => Promise<void>;
 }
 
 const EngineContext = createContext<EngineContextValue | null>(null);
+
+type SyncFastModelPicker = {
+  pick?: (
+    position: THREE.Vector2,
+    request: { depth?: boolean; id?: boolean; normal?: boolean }
+  ) => { surface: { point: THREE.Vector3; distance: number } | null } | null;
+};
+
+function getVisibleModelsBounds(fragments: OBC.FragmentsManager | null): THREE.Box3 | null {
+  if (!fragments || !fragments.initialized) return null;
+  const combinedBox = new THREE.Box3();
+  let hasBox = false;
+
+  for (const [, model] of fragments.list) {
+    if (!model.object.visible) continue;
+    const box =
+      model.box && !model.box.isEmpty()
+        ? model.box
+        : new THREE.Box3().setFromObject(model.object);
+    if (!box.isEmpty()) {
+      combinedBox.union(box);
+      hasBox = true;
+    }
+  }
+
+  return hasBox && !combinedBox.isEmpty() ? combinedBox : null;
+}
+
+function applyOrbitAnchor(controls: CameraControls, point: THREE.Vector3): void {
+  // Stop easing transitions so camera.position and matrixWorldInverse match before pivoting.
+  controls.stop();
+  controls.update(0);
+
+  const prevMin = controls.minDistance;
+  const prevMax = controls.maxDistance;
+  const distance = point.distanceTo(controls.camera.position);
+
+  controls.minDistance = 0.001;
+  controls.maxDistance = Math.max(prevMax, distance + 1);
+  controls.setOrbitPoint(point.x, point.y, point.z);
+  controls.minDistance = prevMin;
+  controls.maxDistance = prevMax;
+  controls.update(0);
+}
+
+function resolveSyncSurfacePoint(
+  components: OBC.Components,
+  world: OBC.SimpleWorld<OBC.SimpleScene, OBC.OrthoPerspectiveCamera, OBC.SimpleRenderer>,
+  ndc: THREE.Vector2
+): THREE.Vector3 | null {
+  const camPos = world.camera.three.position;
+  let bestPoint: THREE.Vector3 | null = null;
+  let bestDistSq = Infinity;
+
+  if (world.renderer?.api !== 'webgpu') {
+    const picker = components.get(OBC.FastModelPickers).get(world) as unknown as SyncFastModelPicker;
+    if (typeof picker.pick === 'function') {
+      const hit = picker.pick(ndc, { depth: true });
+      if (hit?.surface?.point) {
+        const surfacePoint = hit.surface.point.clone();
+        bestPoint = surfacePoint;
+        bestDistSq = camPos.distanceToSquared(surfacePoint);
+      }
+    }
+  }
+
+  if (world.meshes.size > 0) {
+    const raycaster = components.get(OBC.Raycasters).get(world);
+    const meshHit = raycaster.castRayToObjects(Array.from(world.meshes), ndc);
+    if (meshHit?.point) {
+      const distSq = camPos.distanceToSquared(meshHit.point);
+      if (distSq < bestDistSq) {
+        bestPoint = meshHit.point.clone();
+      }
+    }
+  }
+
+  return bestPoint;
+}
+
+async function resolveAsyncSurfacePoint(
+  components: OBC.Components,
+  world: OBC.SimpleWorld<OBC.SimpleScene, OBC.OrthoPerspectiveCamera, OBC.SimpleRenderer>,
+  fragments: OBC.FragmentsManager,
+  ndc: THREE.Vector2,
+  clientPos: THREE.Vector2,
+  domElement: HTMLCanvasElement
+): Promise<THREE.Vector3 | null> {
+  const picker = components.get(OBC.FastModelPickers).get(world);
+  const modelRaycasts = fragments.initialized
+    ? Array.from(fragments.list.values()).map((model) =>
+        model
+          .raycast({
+            camera: world.camera.three,
+            mouse: clientPos,
+            dom: domElement,
+          })
+          .catch(() => null)
+      )
+    : [];
+
+  const [pickerPoint, ...modelHits] = await Promise.all([
+    picker.getPointAt(ndc).catch(() => null),
+    ...modelRaycasts,
+  ]);
+
+  const camPos = world.camera.three.position;
+  let bestPoint: THREE.Vector3 | null = pickerPoint ? pickerPoint.clone() : null;
+  let bestDistSq = bestPoint ? camPos.distanceToSquared(bestPoint) : Infinity;
+
+  for (const hit of modelHits) {
+    if (!hit?.point) continue;
+    const distSq = camPos.distanceToSquared(hit.point);
+    if (distSq < bestDistSq) {
+      bestDistSq = distSq;
+      bestPoint = hit.point.clone();
+    }
+  }
+
+  return bestPoint;
+}
 
 export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [isEngineReady, setIsEngineReady] = useState(false);
 
   const initSessionRef = useRef<number>(0);
+  const anchorRequestIdRef = useRef<number>(0);
+  const pointerOrbitCleanupRef = useRef<(() => void) | null>(null);
   const componentsRef = useRef<OBC.Components | null>(null);
   const worldRef = useRef<OBC.SimpleWorld<
     OBC.SimpleScene,
@@ -73,7 +198,11 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     toggleModelVisibility: toggleStoreModelVisibility,
     toggleGrid: toggleStoreGrid,
     toggleSection: toggleStoreSection,
+    setCameraProjection: setStoreCameraProjection,
   } = useViewerStore();
+
+  const activeToolRef = useRef(activeTool);
+  activeToolRef.current = activeTool;
 
   const initEngine = useCallback(
     async (container: HTMLDivElement) => {
@@ -110,6 +239,34 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
         components.init();
 
+        // Allow close inspection on elements and large civil models without 300m distance clamp
+        world.camera.controls.minDistance = 0.05;
+        world.camera.controls.maxDistance = Infinity;
+        world.dynamicAnchor = false;
+
+        // Reduce default near clipping plane (1m -> adaptive 0.01m..0.1m) to avoid slicing close elements
+        world.camera.threePersp.near = 0.05;
+        world.camera.threePersp.far = 2500;
+        world.camera.threePersp.updateProjectionMatrix();
+
+        world.camera.threeOrtho.near = 0.05;
+        world.camera.threeOrtho.far = 2500;
+        world.camera.threeOrtho.updateProjectionMatrix();
+        world.camera.projection.matchOrthoDistanceEnabled = true;
+
+        const syncCameraNearPlane = () => {
+          if (world.camera.projection.current !== 'Perspective') return;
+          const persp = world.camera.threePersp;
+          const dist = Math.max(0.05, world.camera.controls.distance);
+          const minNear = Math.max(0.01, persp.far / 250000);
+          const desiredNear = THREE.MathUtils.clamp(dist * 0.015, minNear, 0.1);
+          if (Math.abs(persp.near - desiredNear) > desiredNear * 0.1) {
+            persp.near = desiredNear;
+            persp.updateProjectionMatrix();
+          }
+        };
+        world.camera.controls.addEventListener('update', syncCameraNearPlane);
+
         world.scene.setup({
           backgroundColor: new THREE.Color(0x0b0b0d), // Pavasal asphalt black
         });
@@ -131,12 +288,83 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         fragmentsRef.current = fragments;
         fragments.init(workerUrl);
 
+        // Sync loaded models' frustum culling/LOD camera and store state when switching projections
+        world.camera.projection.onChanged.add(
+          (camera: THREE.PerspectiveCamera | THREE.OrthographicCamera) => {
+          syncCameraNearPlane();
+          setStoreCameraProjection(world.camera.projection.current);
+          if (fragments.initialized) {
+            for (const [, model] of fragments.list) {
+              model.useCamera(camera);
+            }
+            void fragments.core.update(true);
+          }
+        });
+        setStoreCameraProjection(world.camera.projection.current);
+
         // Trigger LOD / fragments redraw on camera rest
         world.camera.controls.addEventListener('rest', () => {
           if (fragments.initialized) {
             fragments.core.update(true);
           }
         });
+
+        // Capture-phase left-button orbit anchoring BEFORE camera-controls starts dragging
+        const domElement = world.renderer.three.domElement;
+        const handleOrbitAnchorPointerDown = (event: PointerEvent) => {
+          if (event.button !== 0 || activeToolRef.current === 'pan') return;
+          const currentWorld = worldRef.current;
+          if (!currentWorld?.camera.hasCameraControls()) return;
+          const controls = currentWorld.camera.controls;
+          if (!controls.enabled) return;
+
+          const bounds = domElement.getBoundingClientRect();
+          if (bounds.width <= 0 || bounds.height <= 0) return;
+
+          const ndc = new THREE.Vector2(
+            ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
+            -((event.clientY - bounds.top) / bounds.height) * 2 + 1
+          );
+
+          const requestId = ++anchorRequestIdRef.current;
+          const syncPoint = resolveSyncSurfacePoint(components, currentWorld, ndc);
+          if (syncPoint) {
+            applyOrbitAnchor(controls, syncPoint);
+            return;
+          }
+
+          const clientPos = new THREE.Vector2(event.clientX, event.clientY);
+          void resolveAsyncSurfacePoint(
+            components,
+            currentWorld,
+            fragments,
+            ndc,
+            clientPos,
+            domElement
+          ).then((asyncPoint) => {
+            if (
+              !asyncPoint ||
+              requestId !== anchorRequestIdRef.current ||
+              sessionId !== initSessionRef.current ||
+              currentWorld.isDisposing ||
+              activeToolRef.current === 'pan' ||
+              !currentWorld.camera.hasCameraControls()
+            ) {
+              return;
+            }
+            applyOrbitAnchor(currentWorld.camera.controls, asyncPoint);
+          });
+        };
+
+        pointerOrbitCleanupRef.current?.();
+        domElement.addEventListener('pointerdown', handleOrbitAnchorPointerDown, {
+          capture: true,
+        });
+        pointerOrbitCleanupRef.current = () => {
+          domElement.removeEventListener('pointerdown', handleOrbitAnchorPointerDown, {
+            capture: true,
+          });
+        };
 
         // Highlighter setup
         const highlighter = components.get(OBCF.Highlighter);
@@ -206,14 +434,15 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         console.error('[EngineContext] Failed to initialize ThatOpen 3D Engine:', err);
       }
     },
-    [setSelectedElement]
+    [setSelectedElement, setStoreCameraProjection]
   );
 
   // Sync active tool with engine components
   useEffect(() => {
     if (!isEngineReady || !worldRef.current) return;
 
-    const controls = worldRef.current.camera.controls;
+    const world = worldRef.current;
+    const controls = world.camera.controls;
     const highlighter = highlighterRef.current;
     const lengthMeasurement = lengthMeasurementRef.current;
 
@@ -234,7 +463,11 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const disposeEngine = useCallback(async () => {
     initSessionRef.current++;
+    anchorRequestIdRef.current++;
+    pointerOrbitCleanupRef.current?.();
+    pointerOrbitCleanupRef.current = null;
     setIsEngineReady(false);
+    setStoreCameraProjection('Perspective');
     clearLoadedModels();
     if (componentsRef.current) {
       try {
@@ -250,7 +483,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       lengthMeasurementRef.current = null;
       gridRef.current = null;
     }
-  }, [clearLoadedModels]);
+  }, [clearLoadedModels, setStoreCameraProjection]);
 
   const loadModelFromBuffer = useCallback(
     async (
@@ -311,6 +544,16 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
               : new THREE.Box3().setFromObject(model.object);
 
           if (!box.isEmpty()) {
+            const size = box.getSize(new THREE.Vector3());
+            const maxExtent = Math.max(size.x, size.y, size.z);
+            if (Number.isFinite(maxExtent) && maxExtent > 0) {
+              const dynamicFar = Math.max(2500, maxExtent * 10);
+              world.camera.threePersp.far = dynamicFar;
+              world.camera.threePersp.updateProjectionMatrix();
+              world.camera.threeOrtho.far = dynamicFar;
+              world.camera.threeOrtho.updateProjectionMatrix();
+            }
+
             await world.camera.controls.fitToBox(box, true, {
               paddingLeft: 2,
               paddingRight: 2,
@@ -363,28 +606,10 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const fitCameraToModels = useCallback(async () => {
     const world = worldRef.current;
-    const fragments = fragmentsRef.current;
     if (!world) return;
 
-    const combinedBox = new THREE.Box3();
-    let hasBox = false;
-
-    if (fragments && fragments.initialized) {
-      for (const [, model] of fragments.list) {
-        if (model.object.visible) {
-          const box =
-            model.box && !model.box.isEmpty()
-              ? model.box
-              : new THREE.Box3().setFromObject(model.object);
-          if (!box.isEmpty()) {
-            combinedBox.union(box);
-            hasBox = true;
-          }
-        }
-      }
-    }
-
-    if (hasBox && !combinedBox.isEmpty()) {
+    const combinedBox = getVisibleModelsBounds(fragmentsRef.current);
+    if (combinedBox) {
       await world.camera.controls.fitToBox(combinedBox, true, {
         paddingLeft: 2,
         paddingRight: 2,
@@ -393,6 +618,41 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       });
     } else {
       await world.camera.controls.setLookAt(15, 12, 15, 0, 0, 0, true);
+    }
+  }, []);
+
+  const setPlanView = useCallback(async () => {
+    const world = worldRef.current;
+    const fragments = fragmentsRef.current;
+    if (!world) return;
+
+    const controls = world.camera.controls;
+    const combinedBox = getVisibleModelsBounds(fragments);
+
+    if (combinedBox) {
+      const size = combinedBox.getSize(new THREE.Vector3());
+      const center = combinedBox.getCenter(new THREE.Vector3());
+      // Keep orthographic camera above the highest roof geometry so near clipping never slices it
+      if (world.camera.projection.current === 'Orthographic') {
+        const minTopClearance = combinedBox.max.y - center.y + Math.max(10, size.y * 0.5);
+        if (controls.distance < minTopClearance) {
+          void controls.dollyTo(minTopClearance, false);
+        }
+      }
+      // Orient straight overhead (+X right, -Z up) before fitToBox samples _sphericalEnd
+      void controls.rotateTo(0, 0, true);
+      await controls.fitToBox(combinedBox, true, {
+        paddingLeft: 2,
+        paddingRight: 2,
+        paddingBottom: 2,
+        paddingTop: 2,
+      });
+    } else {
+      await controls.setLookAt(0, 20, 0.001, 0, 0, 0, true);
+    }
+
+    if (fragments?.initialized) {
+      await fragments.core.update(true);
     }
   }, []);
 
@@ -485,6 +745,20 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
   }, []);
 
+  const setCameraProjection = useCallback(
+    async (projection: CameraProjectionMode) => {
+      const world = worldRef.current;
+      if (!world) return;
+      if (world.camera.projection.current === projection) {
+        setStoreCameraProjection(projection);
+        return;
+      }
+      await world.camera.projection.set(projection);
+      setStoreCameraProjection(world.camera.projection.current);
+    },
+    [setStoreCameraProjection]
+  );
+
   return (
     <EngineContext.Provider
       value={{
@@ -500,6 +774,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         toggleModelVisibility,
         removeModel,
         fitCameraToModels,
+        setPlanView,
         focusElement,
         clearSelection,
         captureSnapshotBlob,
@@ -508,6 +783,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         toggleGridVisibility,
         toggleSectionBox,
         clearMeasurements,
+        setCameraProjection,
       }}
     >
       {children}

@@ -107,14 +107,8 @@ export interface AuthGoogleUrlResponse {
   url: string;
 }
 
-export interface AuthPopupMessageEventData {
-  type: 'PAVABIM_AUTH_SUCCESS' | 'PAVABIM_AUTH_ERROR';
-  accessToken?: string;
-  idToken?: string;
-  refreshToken?: string;
-  expiresIn?: number | string;
-  user?: AuthenticatedUser;
-  error?: string;
+export interface AuthGoogleExchangePayload {
+  code: string;
 }
 
 export interface QueryProjectsParams {

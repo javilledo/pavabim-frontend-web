@@ -1,12 +1,17 @@
 import React, { useState } from 'react';
 import { SpatialTreePanel } from '../tree/SpatialTreePanel';
 import { ModelsPanel } from '../tree/ModelsPanel';
+import { ResizableSidebar } from './ResizableSidebar';
 
 export const LeftSidebar: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'tree' | 'models'>('tree');
 
   return (
-    <aside className="w-[300px] flex-shrink-0 bg-asphalt-900 text-asphalt-100 border-r border-asphalt-700 flex flex-col select-none">
+    <ResizableSidebar
+      side="left"
+      storageKey="pavabim_left_sidebar_width"
+      ariaLabel="Ajustar ancho del panel izquierdo"
+    >
       <div className="h-10 border-b border-asphalt-700 flex items-center px-2 bg-asphalt-950 space-x-1">
         <button
           onClick={() => setActiveTab('tree')}
@@ -33,7 +38,7 @@ export const LeftSidebar: React.FC = () => {
       <div className="flex-1 p-3 overflow-y-auto">
         {activeTab === 'tree' ? <SpatialTreePanel /> : <ModelsPanel />}
       </div>
-    </aside>
+    </ResizableSidebar>
   );
 };
 

@@ -18,6 +18,7 @@ export const RibbonToolbar: React.FC = () => {
 
   const {
     activeTool,
+    cameraProjection,
     isGridVisible,
     isSectionActive,
     loadedModels,
@@ -32,9 +33,11 @@ export const RibbonToolbar: React.FC = () => {
   const {
     isEngineReady,
     fitCameraToModels,
+    setPlanView,
     toggleGridVisibility,
     toggleSectionBox,
     clearMeasurements,
+    setCameraProjection,
   } = useEngine();
 
   const projectsQuery = useQuery({
@@ -139,11 +142,11 @@ export const RibbonToolbar: React.FC = () => {
         </div>
 
         {/* Center 3D Viewer Tools */}
-        <div className="flex items-center gap-1 bg-asphalt-900 border border-asphalt-700 rounded-md px-1.5 py-1">
+        <div className="flex items-center gap-1 bg-asphalt-900 border border-asphalt-700 rounded-md px-1.5 py-1 min-w-0 overflow-x-auto">
           <button
             type="button"
             onClick={() => handleToolClick('select')}
-            className={toolBtnClass(activeTool === 'select')}
+            className={`${toolBtnClass(activeTool === 'select')} whitespace-nowrap shrink-0`}
             title="Seleccionar elementos (Esc)"
           >
             Seleccionar
@@ -151,7 +154,7 @@ export const RibbonToolbar: React.FC = () => {
           <button
             type="button"
             onClick={() => handleToolClick('pan')}
-            className={toolBtnClass(activeTool === 'pan')}
+            className={`${toolBtnClass(activeTool === 'pan')} whitespace-nowrap shrink-0`}
             title="Panear vista"
           >
             Panear
@@ -159,7 +162,7 @@ export const RibbonToolbar: React.FC = () => {
           <button
             type="button"
             onClick={() => handleToolClick('measure')}
-            className={toolBtnClass(activeTool === 'measure')}
+            className={`${toolBtnClass(activeTool === 'measure')} whitespace-nowrap shrink-0`}
             title="Medición lineal"
           >
             Medir
@@ -167,30 +170,50 @@ export const RibbonToolbar: React.FC = () => {
           <button
             type="button"
             onClick={() => handleToolClick('section')}
-            className={toolBtnClass(
+            className={`${toolBtnClass(
               isSectionActive || activeTool === 'section',
-            )}
+            )} whitespace-nowrap shrink-0`}
             title="Plano de corte (doble clic para crear plano)"
           >
             Sección
           </button>
 
-          <div className="h-4 w-px bg-asphalt-700 mx-1" />
+          <div className="h-4 w-px bg-asphalt-700 mx-1 shrink-0" />
 
           <button
             type="button"
             onClick={() => fitCameraToModels()}
             disabled={loadedModels.length === 0 || !isEngineReady}
-            className="px-2.5 py-1.5 rounded text-xs text-asphalt-200 hover:bg-asphalt-800 hover:text-white disabled:opacity-40 transition-colors"
+            className="px-2.5 py-1.5 rounded text-xs text-asphalt-200 hover:bg-asphalt-800 hover:text-white disabled:opacity-40 transition-colors whitespace-nowrap shrink-0"
             title="Centrar cámara en modelos cargados"
           >
             Encuadrar
           </button>
           <button
             type="button"
+            onClick={() => void setPlanView()}
+            disabled={!isEngineReady}
+            className="px-2.5 py-1.5 rounded text-xs font-medium text-asphalt-200 hover:bg-asphalt-800 hover:text-white disabled:opacity-40 transition-colors flex items-center gap-1 whitespace-nowrap shrink-0"
+            title="Vista en planta (desde arriba)"
+          >
+            <svg
+              className="w-3.5 h-3.5 shrink-0"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              aria-hidden="true"
+            >
+              <rect x="2.5" y="2.5" width="11" height="11" rx="1" />
+              <path d="M2.5 7h5.5V2.5M8 13.5V9.5h5.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Planta
+          </button>
+          <button
+            type="button"
             onClick={() => toggleGridVisibility()}
             disabled={!isEngineReady}
-            className={toolBtnClass(isGridVisible)}
+            className={`${toolBtnClass(isGridVisible)} whitespace-nowrap shrink-0`}
             title="Mostrar/ocultar grilla"
           >
             Grilla
@@ -199,13 +222,73 @@ export const RibbonToolbar: React.FC = () => {
             type="button"
             onClick={() => clearMeasurements()}
             disabled={!isEngineReady}
-            className="px-2 py-1.5 rounded text-xs text-asphalt-300 hover:bg-asphalt-800 hover:text-white disabled:opacity-40 transition-colors"
+            className="px-2 py-1.5 rounded text-xs text-asphalt-300 hover:bg-asphalt-800 hover:text-white disabled:opacity-40 transition-colors whitespace-nowrap shrink-0"
             title="Limpiar mediciones"
           >
             Limpiar
           </button>
 
-          <div className="h-4 w-px bg-asphalt-700 mx-1" />
+          <div className="h-4 w-px bg-asphalt-700 mx-1 shrink-0" />
+
+          {/* Camera Projection Switcher: Perspective (Conical) vs Orthographic */}
+          <div
+            role="group"
+            aria-label="Tipo de proyección"
+            className="flex items-center gap-0.5 rounded bg-asphalt-950/80 border border-asphalt-700/80 p-0.5 shrink-0"
+          >
+            <button
+              type="button"
+              disabled={!isEngineReady}
+              aria-pressed={cameraProjection === 'Perspective'}
+              onClick={() => void setCameraProjection('Perspective')}
+              className={`px-2 py-1 rounded text-xs transition-colors flex items-center gap-1 whitespace-nowrap disabled:opacity-40 ${
+                cameraProjection === 'Perspective'
+                  ? 'bg-pavasal-500 text-asphalt-950 font-semibold shadow-sm'
+                  : 'text-asphalt-200 font-medium hover:bg-asphalt-800 hover:text-white'
+              }`}
+              title="Vista cónica (perspectiva)"
+            >
+              <svg
+                className="w-3.5 h-3.5 shrink-0"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                aria-hidden="true"
+              >
+                <path d="M4.5 3.5h7l2.5 9H2l2.5-9Z" strokeLinejoin="round" />
+                <path d="M6 6.5h4" strokeLinecap="round" />
+              </svg>
+              Cónica
+            </button>
+            <button
+              type="button"
+              disabled={!isEngineReady}
+              aria-pressed={cameraProjection === 'Orthographic'}
+              onClick={() => void setCameraProjection('Orthographic')}
+              className={`px-2 py-1 rounded text-xs transition-colors flex items-center gap-1 whitespace-nowrap disabled:opacity-40 ${
+                cameraProjection === 'Orthographic'
+                  ? 'bg-pavasal-500 text-asphalt-950 font-semibold shadow-sm'
+                  : 'text-asphalt-200 font-medium hover:bg-asphalt-800 hover:text-white'
+              }`}
+              title="Vista ortogonal (ortográfica)"
+            >
+              <svg
+                className="w-3.5 h-3.5 shrink-0"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                aria-hidden="true"
+              >
+                <rect x="2.5" y="4.5" width="7.5" height="7.5" rx="0.5" />
+                <path d="M6 4.5V2.5h7.5V10h-2" strokeLinejoin="round" />
+              </svg>
+              Ortogonal
+            </button>
+          </div>
+
+          <div className="h-4 w-px bg-asphalt-700 mx-1 shrink-0" />
 
           <input
             ref={fileInputRef}
@@ -219,7 +302,7 @@ export const RibbonToolbar: React.FC = () => {
             type="button"
             disabled={!isEngineReady}
             onClick={() => fileInputRef.current?.click()}
-            className="px-2.5 py-1.5 rounded text-xs font-semibold border border-pavasal-500/70 bg-pavasal-500/15 text-pavasal-400 hover:bg-pavasal-500 hover:text-asphalt-950 disabled:opacity-40 transition-colors"
+            className="px-2.5 py-1.5 rounded text-xs font-semibold border border-pavasal-500/70 bg-pavasal-500/15 text-pavasal-400 hover:bg-pavasal-500 hover:text-asphalt-950 disabled:opacity-40 transition-colors whitespace-nowrap shrink-0"
             title="Subir archivos .frag o .ifc locales sin necesidad de proyecto"
           >
             + .frag / .ifc local

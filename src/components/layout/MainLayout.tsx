@@ -14,7 +14,7 @@ export const MainLayout: React.FC = () => {
       <div className="flex-1 flex overflow-hidden relative">
         <LeftSidebar />
 
-        <main className="flex-1 relative h-full overflow-hidden">
+        <main className="flex-1 min-w-0 relative h-full overflow-hidden">
           <ViewerCanvas />
         </main>
 

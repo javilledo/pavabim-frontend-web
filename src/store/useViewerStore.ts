@@ -3,6 +3,7 @@ import type { ModelStatusResponse, ProjectWithRole } from '../types/api.types';
 import type { CameraViewpointData } from '../types/bcf.types';
 
 export type ActiveTool = 'orbit' | 'select' | 'pan' | 'measure' | 'section';
+export type CameraProjectionMode = 'Perspective' | 'Orthographic';
 
 export interface LoadedModel {
   id: string;
@@ -46,6 +47,7 @@ function saveProjectId(projectId: string | null): void {
 interface ViewerState {
   // Navigation & Viewer Tools
   activeTool: ActiveTool;
+  cameraProjection: CameraProjectionMode;
   isGridVisible: boolean;
   isSectionActive: boolean;
 
@@ -68,6 +70,7 @@ interface ViewerState {
 
   // Actions
   setActiveTool: (tool: ActiveTool) => void;
+  setCameraProjection: (projection: CameraProjectionMode) => void;
   toggleGrid: () => void;
   toggleSection: () => void;
   setModelLoading: (loading: boolean, modelName?: string | null) => void;
@@ -94,6 +97,7 @@ interface ViewerState {
 
 export const useViewerStore = create<ViewerState>((set, get) => ({
   activeTool: 'select',
+  cameraProjection: 'Perspective',
   isGridVisible: true,
   isSectionActive: false,
 
@@ -113,6 +117,8 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   activeBcfTopicId: null,
 
   setActiveTool: (tool) => set({ activeTool: tool }),
+
+  setCameraProjection: (cameraProjection) => set({ cameraProjection }),
 
   toggleGrid: () => set((state) => ({ isGridVisible: !state.isGridVisible })),
 

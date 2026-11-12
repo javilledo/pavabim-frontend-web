@@ -30,6 +30,33 @@ interface AuthContextValue {
   clearAuthError: () => void;
 }
 
+interface RedirectAuthParams {
+  authCode: string | null;
+  authError: string | null;
+}
+
+function consumeRedirectAuthParams(): RedirectAuthParams {
+  if (typeof window === 'undefined') {
+    return { authCode: null, authError: null };
+  }
+
+  const url = new URL(window.location.href);
+  const authCode = url.searchParams.get('authCode');
+  const authError = url.searchParams.get('authError');
+
+  if (authCode !== null || authError !== null) {
+    url.searchParams.delete('authCode');
+    url.searchParams.delete('authError');
+    const cleanSearch = url.searchParams.toString();
+    const nextUrl = `${url.pathname}${cleanSearch ? `?${cleanSearch}` : ''}${url.hash}`;
+    window.history.replaceState({}, document.title, nextUrl);
+  }
+
+  return { authCode, authError };
+}
+
+const initialRedirectAuthParams = consumeRedirectAuthParams();
+
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({
@@ -38,9 +65,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   const queryClient = useQueryClient();
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [loading, setLoading] = useState<boolean>(() =>
-    Boolean(getStoredAuthSession()),
+    Boolean(
+      initialRedirectAuthParams.authCode ||
+        (!initialRedirectAuthParams.authError && getStoredAuthSession()),
+    ),
   );
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(
+    () => initialRedirectAuthParams.authError,
+  );
 
   const resetClientSessionState = useCallback(() => {
     setUser(null);
@@ -57,13 +89,55 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   }, [resetClientSessionState]);
 
   useEffect(() => {
-    const stored = getStoredAuthSession();
-    if (!stored) {
+    if (initialRedirectAuthParams.authError) {
+      clearAuthSession();
+      resetClientSessionState();
+      setAuthError(initialRedirectAuthParams.authError);
       setLoading(false);
       return;
     }
 
     let cancelled = false;
+
+    if (initialRedirectAuthParams.authCode) {
+      authService
+        .exchangeGoogleCode(initialRedirectAuthParams.authCode)
+        .then((session) => {
+          saveAuthSession(session);
+          initialRedirectAuthParams.authCode = null;
+          if (!cancelled) {
+            setAuthError(null);
+            setUser(session.user);
+          }
+        })
+        .catch((err: unknown) => {
+          clearAuthSession();
+          initialRedirectAuthParams.authCode = null;
+          if (!cancelled) {
+            resetClientSessionState();
+            setAuthError(
+              err instanceof Error
+                ? err.message
+                : 'No se pudo completar el inicio de sesión con Google.',
+            );
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setLoading(false);
+          }
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const stored = getStoredAuthSession();
+    if (!stored) {
+      setLoading(false);
+      return;
+    }
 
     authService
       .fetchCurrentUser()
@@ -96,9 +170,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   const loginWithGoogle = useCallback(async () => {
     setAuthError(null);
     try {
-      const session = await authService.loginWithGooglePopup();
-      saveAuthSession(session);
-      setUser(session.user);
+      await authService.startGoogleLogin();
     } catch (err: unknown) {
       const message =
         err instanceof Error

@@ -51,6 +51,7 @@ const PUBLIC_AUTH_PATHS = new Set([
   '/auth/refresh',
   '/auth/google/url',
   '/auth/google/callback',
+  '/auth/google/exchange',
 ]);
 
 function isPublicAuthRequest(url?: string): boolean {

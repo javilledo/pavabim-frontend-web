@@ -11,8 +11,6 @@ export const LoginScreen: React.FC = () => {
     try {
       await loginWithGoogle();
     } catch {
-      // authError state displays feedback
-    } finally {
       setIsSubmitting(false);
     }
   };
@@ -76,7 +74,7 @@ export const LoginScreen: React.FC = () => {
             </svg>
             <span>
               {isSubmitting
-                ? 'Esperando autorización de Google...'
+                ? 'Redirigiendo a Google...'
                 : 'Continuar con cuenta corporativa de Google'}
             </span>
           </button>

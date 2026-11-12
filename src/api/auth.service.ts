@@ -5,10 +5,13 @@ import {
   type StoredAuthSession,
 } from '../auth/authSession';
 import type {
+  AuthGoogleExchangePayload,
   AuthGoogleUrlResponse,
-  AuthPopupMessageEventData,
   AuthenticatedUser,
+  BackendAuthResponse,
 } from '../types/api.types';
+
+const exchangePromiseCache = new Map<string, Promise<StoredAuthSession>>();
 
 function formatBackendAuthError(err: unknown, fallback: string): Error {
   if (axios.isAxiosError(err) && err.response?.status === 404) {
@@ -34,82 +37,37 @@ export const authService = {
     }
   },
 
-  async loginWithGooglePopup(): Promise<StoredAuthSession> {
+  async startGoogleLogin(): Promise<void> {
     const { url } = await this.getGoogleAuthUrl();
+    window.location.assign(url);
+  },
 
-    const width = 520;
-    const height = 660;
-    const left = window.screenX + Math.max(0, (window.outerWidth - width) / 2);
-    const top = window.screenY + Math.max(0, (window.outerHeight - height) / 2);
-
-    const popup = window.open(
-      url,
-      'pavabim-backend-google-auth',
-      `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`,
-    );
-
-    if (!popup) {
-      throw new Error(
-        'El navegador bloqueó la ventana emergente de inicio de sesión. Habilita las ventanas emergentes e inténtalo de nuevo.',
-      );
+  async exchangeGoogleCode(code: string): Promise<StoredAuthSession> {
+    const normalizedCode = code.trim();
+    if (!normalizedCode) {
+      throw new Error('Código de autenticación temporal vacío.');
     }
 
-    return new Promise((resolve, reject) => {
-      let settled = false;
+    // Deduplicate concurrent calls caused by React StrictMode double effects
+    // because the backend invalidates each authCode after the first use.
+    const existing = exchangePromiseCache.get(normalizedCode);
+    if (existing) {
+      return existing;
+    }
 
-      const cleanup = () => {
-        window.removeEventListener('message', handleMessage);
-        window.clearInterval(closedCheckTimer);
-      };
+    const payload: AuthGoogleExchangePayload = { code: normalizedCode };
+    const requestPromise = apiClient
+      .post<BackendAuthResponse>('/auth/google/exchange', payload)
+      .then(({ data }) => normalizeBackendAuthSession(data))
+      .catch((err) => {
+        throw formatBackendAuthError(
+          err,
+          'No se pudo validar el acceso corporativo con Google.',
+        );
+      });
 
-      const handleMessage = (event: MessageEvent) => {
-        if (event.source !== popup) return;
-        const payload = event.data as Partial<AuthPopupMessageEventData> | null;
-        if (!payload || typeof payload !== 'object') return;
-
-        if (payload.type === 'PAVABIM_AUTH_SUCCESS') {
-          settled = true;
-          cleanup();
-          try {
-            if (!payload.user) {
-              throw new Error('Respuesta OAuth incompleta del servidor.');
-            }
-            const session = normalizeBackendAuthSession({
-              accessToken: payload.accessToken,
-              idToken: payload.idToken,
-              refreshToken: payload.refreshToken,
-              expiresIn: payload.expiresIn,
-              user: payload.user,
-            });
-            resolve(session);
-          } catch (normErr) {
-            reject(
-              normErr instanceof Error
-                ? normErr
-                : new Error('No se pudo validar la sesión de Google.'),
-            );
-          }
-        } else if (payload.type === 'PAVABIM_AUTH_ERROR') {
-          settled = true;
-          cleanup();
-          reject(
-            new Error(
-              payload.error || 'No se pudo completar el inicio de sesión con Google.',
-            ),
-          );
-        }
-      };
-
-      window.addEventListener('message', handleMessage);
-
-      const closedCheckTimer = window.setInterval(() => {
-        if (popup.closed && !settled) {
-          settled = true;
-          cleanup();
-          reject(new Error('Ventana de inicio de sesión cerrada por el usuario.'));
-        }
-      }, 500);
-    });
+    exchangePromiseCache.set(normalizedCode, requestPromise);
+    return requestPromise;
   },
 
   async fetchCurrentUser(): Promise<AuthenticatedUser> {
@@ -127,4 +85,3 @@ export const authService = {
 };
 
 export default authService;
-
