@@ -109,6 +109,7 @@ interface ViewerState {
     properties?: Record<string, unknown> | null,
   ) => void;
   addHiddenElements: (items: Record<string, number[]>) => void;
+  removeHiddenElements: (items: Record<string, number[]>) => void;
   setIsolationActive: (active: boolean) => void;
   clearHiddenElements: () => void;
   addLocalViewpoint: (vp: LocalViewpoint) => void;
@@ -297,6 +298,22 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         const merged = new Set(nextHidden[modelId] ?? []);
         for (const id of ids) merged.add(id);
         nextHidden[modelId] = Array.from(merged);
+      }
+      return { hiddenElementsMap: nextHidden };
+    }),
+
+  removeHiddenElements: (items) =>
+    set((state) => {
+      const nextHidden: Record<string, number[]> = { ...state.hiddenElementsMap };
+      for (const [modelId, ids] of Object.entries(items)) {
+        if (!ids || ids.length === 0 || !nextHidden[modelId]) continue;
+        const currentSet = new Set(nextHidden[modelId]);
+        for (const id of ids) currentSet.delete(id);
+        if (currentSet.size === 0) {
+          delete nextHidden[modelId];
+        } else {
+          nextHidden[modelId] = Array.from(currentSet);
+        }
       }
       return { hiddenElementsMap: nextHidden };
     }),

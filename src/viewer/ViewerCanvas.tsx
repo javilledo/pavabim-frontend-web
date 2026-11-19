@@ -43,7 +43,7 @@ export const ViewerCanvas: React.FC = () => {
     initEngine,
     disposeEngine,
     clearSelection,
-    hideSelectedElements,
+    toggleHideSelectedElements,
     pickFaceAtClientPoint,
     pickCoordinateAtClientPoint,
     pickMeasureTargetAtClientPoint,
@@ -230,7 +230,7 @@ export const ViewerCanvas: React.FC = () => {
         );
         if (!hasSelection) return;
         e.preventDefault();
-        void hideSelectedElements();
+        void toggleHideSelectedElements();
       }
     };
 
@@ -241,7 +241,7 @@ export const ViewerCanvas: React.FC = () => {
     clearSelection,
     faceContextMenu,
     handleUndoMeasurement,
-    hideSelectedElements,
+    toggleHideSelectedElements,
     isEngineReady,
     pickedCoordinate,
     selectedElementsMap,

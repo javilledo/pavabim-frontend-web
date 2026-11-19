@@ -92,7 +92,8 @@ export interface EngineContextValue {
   focusSelectionMap: (selectionByModel: Record<string, number[]>, zoomToSelection?: boolean) => Promise<void>;
   toggleSelectionMap: (selectionByModel: Record<string, number[]>, zoomToSelection?: boolean) => Promise<void>;
   clearSelection: () => Promise<void>;
-  hideSelectedElements: () => Promise<void>;
+  hideSelectedElements: (keepSelection?: boolean) => Promise<void>;
+  toggleHideSelectedElements: () => Promise<void>;
   isolateSelectedElements: () => Promise<void>;
   showAllElements: () => Promise<void>;
   captureSnapshotBlob: () => Promise<Blob | null>;
@@ -855,6 +856,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     activeTool,
     setSelectedElements,
     addHiddenElements,
+    removeHiddenElements,
     setIsolationActive,
     clearHiddenElements,
     setModelLoading,
@@ -1908,24 +1910,66 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setSelectedElements({}, null, null, null);
   }, [setSelectedElements]);
 
-  const hideSelectedElements = useCallback(async () => {
+  const hideSelectedElements = useCallback(
+    async (keepSelection = false) => {
+      const components = componentsRef.current;
+      if (!components) return;
+
+      const selectedMap = useViewerStore.getState().selectedElementsMap;
+      const modelIdMap: OBC.ModelIdMap = {};
+      for (const [modelId, localIds] of Object.entries(selectedMap)) {
+        if (localIds.length > 0) {
+          modelIdMap[modelId] = new Set(localIds);
+        }
+      }
+      if (Object.keys(modelIdMap).length === 0) return;
+
+      const hider = components.get(OBC.Hider);
+      await hider.set(false, modelIdMap);
+      addHiddenElements(selectedMap);
+      if (!keepSelection) {
+        await clearSelection();
+      }
+    },
+    [addHiddenElements, clearSelection]
+  );
+
+  const toggleHideSelectedElements = useCallback(async () => {
     const components = componentsRef.current;
     if (!components) return;
 
-    const selectedMap = useViewerStore.getState().selectedElementsMap;
+    const { selectedElementsMap, hiddenElementsMap } = useViewerStore.getState();
     const modelIdMap: OBC.ModelIdMap = {};
-    for (const [modelId, localIds] of Object.entries(selectedMap)) {
-      if (localIds.length > 0) {
-        modelIdMap[modelId] = new Set(localIds);
+    let totalSelected = 0;
+    let hiddenSelectedCount = 0;
+
+    for (const [modelId, localIds] of Object.entries(selectedElementsMap)) {
+      if (localIds.length === 0) continue;
+      modelIdMap[modelId] = new Set(localIds);
+      totalSelected += localIds.length;
+      const hiddenSet = new Set(hiddenElementsMap[modelId] ?? []);
+      for (const id of localIds) {
+        if (hiddenSet.has(id)) {
+          hiddenSelectedCount++;
+        }
       }
     }
-    if (Object.keys(modelIdMap).length === 0) return;
+
+    if (totalSelected === 0) return;
 
     const hider = components.get(OBC.Hider);
-    await hider.set(false, modelIdMap);
-    addHiddenElements(selectedMap);
-    await clearSelection();
-  }, [addHiddenElements, clearSelection]);
+    // If all or some selected elements are currently hidden, toggle them to visible (show).
+    // Otherwise, if none are hidden (or they are visible), hide them.
+    const shouldMakeVisible = hiddenSelectedCount > 0;
+
+    await hider.set(shouldMakeVisible, modelIdMap);
+
+    if (shouldMakeVisible) {
+      removeHiddenElements(selectedElementsMap);
+    } else {
+      addHiddenElements(selectedElementsMap);
+    }
+  }, [addHiddenElements, removeHiddenElements]);
 
   const isolateSelectedElements = useCallback(async () => {
     const components = componentsRef.current;
@@ -3714,6 +3758,7 @@ const worldPointToGeoreferenced = async (
         toggleSelectionMap,
         clearSelection,
         hideSelectedElements,
+        toggleHideSelectedElements,
         isolateSelectedElements,
         showAllElements,
         captureSnapshotBlob,
