@@ -53,9 +53,11 @@ export const ViewerCanvas: React.FC = () => {
     clearMeasurements,
     measurementCount,
     pickAreaFaceAtClientPoint,
-    updateAreaMeasureOverlay,
+    updateAreaSelectedOverlay,
+    updateAreaHoverOverlay,
     pickVolumeElementAtClientPoint,
-    updateVolumeMeasureOverlay,
+    updateVolumeSelectedOverlay,
+    updateVolumeHoverOverlay,
     createSectionFromFace,
     lookPerpendicularToFace,
     clearSections,
@@ -104,6 +106,8 @@ export const ViewerCanvas: React.FC = () => {
   const [volumeItems, setVolumeItems] = useState<VolumeElementMeasurement[]>([]);
   const [hoverVolumeElement, setHoverVolumeElement] =
     useState<VolumeElementMeasurement | null>(null);
+  const prevHoverAreaKeyRef = useRef<string | null>(null);
+  const prevHoverVolumeKeyRef = useRef<string | null>(null);
 
   const totalArea = useMemo(
     () => areaItems.reduce((sum, item) => sum + item.area, 0),
@@ -117,6 +121,8 @@ export const ViewerCanvas: React.FC = () => {
   const handleClearAllMeasurements = useCallback(() => {
     clearMeasurements();
     measurePickReqIdRef.current++;
+    prevHoverAreaKeyRef.current = null;
+    prevHoverVolumeKeyRef.current = null;
     setAnchorMeasureTarget(null);
     setHoverMeasureTarget(null);
     setAreaItems([]);
@@ -284,9 +290,11 @@ export const ViewerCanvas: React.FC = () => {
       setHoverMeasureScreenPos(null);
     }
     if (activeTool !== 'measure' || measureMode !== 'area') {
+      prevHoverAreaKeyRef.current = null;
       setHoverAreaFace(null);
     }
     if (activeTool !== 'measure' || measureMode !== 'volume') {
+      prevHoverVolumeKeyRef.current = null;
       setHoverVolumeElement(null);
     }
     if (activeTool !== 'measure') {
@@ -320,10 +328,20 @@ export const ViewerCanvas: React.FC = () => {
 
   useEffect(() => {
     if (!isEngineReady) return;
+    updateAreaSelectedOverlay(areaItems);
+  }, [isEngineReady, areaItems, updateAreaSelectedOverlay]);
+
+  useEffect(() => {
+    if (!isEngineReady) return;
+    void updateVolumeSelectedOverlay(volumeItems);
+  }, [isEngineReady, volumeItems, updateVolumeSelectedOverlay]);
+
+  useEffect(() => {
+    if (!isEngineReady) return;
     const activeHover =
       activeTool === 'measure' && measureMode === 'area' ? hoverAreaFace : null;
-    updateAreaMeasureOverlay(areaItems, activeHover);
-  }, [activeTool, measureMode, isEngineReady, areaItems, hoverAreaFace, updateAreaMeasureOverlay]);
+    updateAreaHoverOverlay(activeHover);
+  }, [isEngineReady, activeTool, measureMode, hoverAreaFace, updateAreaHoverOverlay]);
 
   useEffect(() => {
     if (!isEngineReady) return;
@@ -331,14 +349,13 @@ export const ViewerCanvas: React.FC = () => {
       activeTool === 'measure' && measureMode === 'volume'
         ? hoverVolumeElement
         : null;
-    void updateVolumeMeasureOverlay(volumeItems, activeHover);
+    void updateVolumeHoverOverlay(activeHover);
   }, [
     activeTool,
     measureMode,
     isEngineReady,
-    volumeItems,
     hoverVolumeElement,
-    updateVolumeMeasureOverlay,
+    updateVolumeHoverOverlay,
   ]);
 
   useEffect(() => {
@@ -457,7 +474,11 @@ export const ViewerCanvas: React.FC = () => {
         ) {
           return;
         }
-        setHoverAreaFace(face);
+        const key = face?.key ?? null;
+        if (key !== prevHoverAreaKeyRef.current) {
+          prevHoverAreaKeyRef.current = key;
+          setHoverAreaFace(face);
+        }
       } else if (measureModeRef.current === 'volume') {
         const vol = await pickVolumeElementAtClientPoint(e.clientX, e.clientY, {
           hoverOnly: true,
@@ -468,7 +489,11 @@ export const ViewerCanvas: React.FC = () => {
         ) {
           return;
         }
-        setHoverVolumeElement(vol);
+        const key = vol?.key ?? null;
+        if (key !== prevHoverVolumeKeyRef.current) {
+          prevHoverVolumeKeyRef.current = key;
+          setHoverVolumeElement(vol);
+        }
       } else {
         const target = await pickMeasureTargetAtClientPoint(e.clientX, e.clientY);
         if (

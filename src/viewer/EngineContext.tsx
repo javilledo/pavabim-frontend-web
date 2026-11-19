@@ -127,6 +127,8 @@ export interface EngineContextValue {
     clientX: number,
     clientY: number
   ) => Promise<AreaFaceMeasurement | null>;
+  updateAreaSelectedOverlay: (items: AreaFaceMeasurement[]) => void;
+  updateAreaHoverOverlay: (hover: AreaFaceMeasurement | null) => void;
   updateAreaMeasureOverlay: (
     items: AreaFaceMeasurement[],
     hover?: AreaFaceMeasurement | null
@@ -136,6 +138,8 @@ export interface EngineContextValue {
     clientY: number,
     options?: { hoverOnly?: boolean }
   ) => Promise<VolumeElementMeasurement | null>;
+  updateVolumeSelectedOverlay: (items: VolumeElementMeasurement[]) => Promise<void>;
+  updateVolumeHoverOverlay: (hover: VolumeElementMeasurement | null) => Promise<void>;
   updateVolumeMeasureOverlay: (
     items: VolumeElementMeasurement[],
     hover?: VolumeElementMeasurement | null
@@ -194,54 +198,88 @@ function getMeshWorldNormal(
   return faceNormal.clone().applyMatrix3(normalMatrix).normalize();
 }
 
-function createMeasureBadgeLabel(
+interface MeasureBadgeEntry {
+  key: string;
+  labelObj: CSS2DObject;
+  primaryDiv: HTMLDivElement;
+  subDiv: HTMLDivElement;
+  containerDiv: HTMLDivElement;
+}
+
+function createMeasureBadgeEntry(
+  key: string,
   primaryText: string,
   borderColor: string,
   secondaryText?: string
-): CSS2DObject {
-  const el = document.createElement('div');
-  el.style.background = 'rgba(15, 23, 42, 0.92)';
-  el.style.border = `1px solid ${borderColor}`;
-  el.style.color = '#f8fafc';
-  el.style.fontSize = '12px';
-  el.style.fontWeight = '600';
-  el.style.fontVariantNumeric = 'tabular-nums';
-  el.style.padding = '3px 8px';
-  el.style.borderRadius = '6px';
-  el.style.whiteSpace = 'nowrap';
-  el.style.lineHeight = '1.25';
-  el.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.45)';
-  el.style.pointerEvents = 'none';
-  el.style.userSelect = 'none';
-  el.style.zIndex = '5';
+): MeasureBadgeEntry {
+  const containerDiv = document.createElement('div');
+  containerDiv.className = 'pavabim-measure-badge';
+  containerDiv.style.background = 'rgba(15, 23, 42, 0.94)';
+  containerDiv.style.border = `1px solid ${borderColor}`;
+  containerDiv.style.color = '#f8fafc';
+  containerDiv.style.fontSize = '12px';
+  containerDiv.style.fontWeight = '600';
+  containerDiv.style.fontVariantNumeric = 'tabular-nums';
+  containerDiv.style.padding = '3px 8px';
+  containerDiv.style.borderRadius = '6px';
+  containerDiv.style.whiteSpace = 'nowrap';
+  containerDiv.style.lineHeight = '1.25';
+  containerDiv.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.5)';
+  containerDiv.style.pointerEvents = 'none';
+  containerDiv.style.userSelect = 'none';
+  containerDiv.style.zIndex = '5';
+  containerDiv.style.contain = 'layout style';
 
-  const primaryLine = document.createElement('div');
-  primaryLine.textContent = primaryText;
-  el.appendChild(primaryLine);
+  const primaryDiv = document.createElement('div');
+  primaryDiv.textContent = primaryText;
+  containerDiv.appendChild(primaryDiv);
 
+  const subDiv = document.createElement('div');
+  subDiv.style.fontSize = '10px';
+  subDiv.style.fontWeight = '500';
+  subDiv.style.color = '#cbd5e1';
   if (secondaryText) {
-    const subLine = document.createElement('div');
-    subLine.textContent = secondaryText;
-    subLine.style.fontSize = '10px';
-    subLine.style.fontWeight = '500';
-    subLine.style.color = '#cbd5e1';
-    el.appendChild(subLine);
+    subDiv.textContent = secondaryText;
+    subDiv.style.display = 'block';
+  } else {
+    subDiv.style.display = 'none';
   }
+  containerDiv.appendChild(subDiv);
 
-  return new CSS2DObject(el);
+  const labelObj = new CSS2DObject(containerDiv);
+  return { key, labelObj, primaryDiv, subDiv, containerDiv };
+}
+
+function syncMeasureBadgeEntry(
+  entry: MeasureBadgeEntry,
+  primaryText: string,
+  borderColor: string,
+  secondaryText?: string
+): void {
+  if (entry.primaryDiv.textContent !== primaryText) {
+    entry.primaryDiv.textContent = primaryText;
+  }
+  if (secondaryText) {
+    if (entry.subDiv.textContent !== secondaryText) {
+      entry.subDiv.textContent = secondaryText;
+    }
+    if (entry.subDiv.style.display !== 'block') {
+      entry.subDiv.style.display = 'block';
+    }
+  } else {
+    if (entry.subDiv.style.display !== 'none') {
+      entry.subDiv.style.display = 'none';
+    }
+  }
+  if (entry.containerDiv.style.borderColor !== borderColor) {
+    entry.containerDiv.style.borderColor = borderColor;
+  }
 }
 
 function clearDynamicMeasureGroup(
   group: THREE.Group,
-  labels: CSS2DObject[],
   disposables?: { dispose: () => void }[]
 ): void {
-  for (const label of labels) {
-    label.element.remove();
-    label.removeFromParent();
-  }
-  labels.length = 0;
-
   if (disposables) {
     for (const item of disposables) {
       item.dispose();
@@ -666,6 +704,8 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     anchorFaceOutline: Line2;
     hoverFaceDisk: THREE.Mesh;
     hoverFaceRing: THREE.LineLoop;
+    hoverAreaFill: THREE.Mesh;
+    hoverAreaOutline: Line2;
     previewGuides: THREE.LineSegments;
     previewDim: OBCF.DimensionLine;
     permanentGuidesGroup: THREE.Group;
@@ -673,10 +713,10 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     committedLines: OBCF.Line[];
     permanentGuidesByLine: Map<OBCF.Line, THREE.LineSegments>;
     areaGroup: THREE.Group;
-    areaLabels: CSS2DObject[];
+    areaBadgeMap: Map<string, MeasureBadgeEntry>;
     areaDisposables: { dispose: () => void }[];
     volumeGroup: THREE.Group;
-    volumeLabels: CSS2DObject[];
+    volumeBadgeMap: Map<string, MeasureBadgeEntry>;
     dispose: () => void;
   } | null>(null);
 
@@ -1170,6 +1210,27 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         hoverFaceRing.frustumCulled = false;
         hoverFaceRing.renderOrder = 54;
 
+        const {
+          lineObj: hoverAreaOutline,
+          geo: hoverAreaOutlineGeo,
+          mat: hoverAreaOutlineMat,
+        } = createFatHighlightLine(0x38bdf8, 2.5);
+        hoverAreaOutline.renderOrder = 54;
+
+        const hoverAreaFillGeo = new THREE.BufferGeometry();
+        hoverAreaFillGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(0), 3));
+        const hoverAreaFillMat = new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          side: THREE.DoubleSide,
+          depthTest: false,
+          transparent: true,
+          opacity: 0.24,
+        });
+        const hoverAreaFill = new THREE.Mesh(hoverAreaFillGeo, hoverAreaFillMat);
+        hoverAreaFill.visible = false;
+        hoverAreaFill.frustumCulled = false;
+        hoverAreaFill.renderOrder = 53;
+
         const syncHighlightResolution = ({ x, y }: THREE.Vector2) => {
           const rx = x || 1;
           const ry = y || 1;
@@ -1177,6 +1238,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           anchorEdgeMat.resolution.set(rx, ry);
           hoverFaceOutlineMat.resolution.set(rx, ry);
           anchorFaceOutlineMat.resolution.set(rx, ry);
+          hoverAreaOutlineMat.resolution.set(rx, ry);
         };
         renderer2D.onResize.add(syncHighlightResolution);
 
@@ -1238,6 +1300,8 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           anchorFaceOutline,
           hoverFaceDisk,
           hoverFaceRing,
+          hoverAreaFill,
+          hoverAreaOutline,
           previewGuides,
           permanentGuidesGroup,
           areaGroup,
@@ -1247,9 +1311,9 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
         const committedLines: OBCF.Line[] = [];
         const permanentGuidesByLine = new Map<OBCF.Line, THREE.LineSegments>();
-        const areaLabels: CSS2DObject[] = [];
+        const areaBadgeMap = new Map<string, MeasureBadgeEntry>();
         const areaDisposables: { dispose: () => void }[] = [];
-        const volumeLabels: CSS2DObject[] = [];
+        const volumeBadgeMap = new Map<string, MeasureBadgeEntry>();
 
         measureOverlayRef.current = {
           root: overlayRoot,
@@ -1261,6 +1325,8 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           anchorFaceOutline,
           hoverFaceDisk,
           hoverFaceRing,
+          hoverAreaFill,
+          hoverAreaOutline,
           previewGuides,
           previewDim,
           permanentGuidesGroup,
@@ -1268,10 +1334,10 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           committedLines,
           permanentGuidesByLine,
           areaGroup,
-          areaLabels,
+          areaBadgeMap,
           areaDisposables,
           volumeGroup,
-          volumeLabels,
+          volumeBadgeMap,
           dispose: () => {
             renderer2D.onResize.remove(syncHighlightResolution);
             try {
@@ -1284,8 +1350,18 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             }
             permanentGuidesByLine.clear();
             committedLines.length = 0;
-            clearDynamicMeasureGroup(areaGroup, areaLabels, areaDisposables);
-            clearDynamicMeasureGroup(volumeGroup, volumeLabels);
+            for (const badge of areaBadgeMap.values()) {
+              badge.labelObj.element.remove();
+              badge.labelObj.removeFromParent();
+            }
+            areaBadgeMap.clear();
+            clearDynamicMeasureGroup(areaGroup, areaDisposables);
+            for (const badge of volumeBadgeMap.values()) {
+              badge.labelObj.element.remove();
+              badge.labelObj.removeFromParent();
+            }
+            volumeBadgeMap.clear();
+            volumeGroup.clear();
             permanentGuidesMat.dispose();
             hoverEdgeGeo.dispose();
             hoverEdgeMat.dispose();
@@ -1295,6 +1371,10 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             hoverFaceFillMat.dispose();
             hoverFaceOutlineGeo.dispose();
             hoverFaceOutlineMat.dispose();
+            hoverAreaFillGeo.dispose();
+            hoverAreaFillMat.dispose();
+            hoverAreaOutlineGeo.dispose();
+            hoverAreaOutlineMat.dispose();
             anchorFaceFillGeo.dispose();
             anchorFaceFillMat.dispose();
             anchorFaceOutlineGeo.dispose();
@@ -2717,12 +2797,25 @@ const worldPointToGeoreferenced = async (
       }
       overlay.permanentGuidesByLine.clear();
       overlay.committedLines.length = 0;
+      overlay.hoverAreaFill.visible = false;
+      overlay.hoverAreaOutline.visible = false;
       clearDynamicMeasureGroup(
         overlay.areaGroup,
-        overlay.areaLabels,
         overlay.areaDisposables
       );
-      clearDynamicMeasureGroup(overlay.volumeGroup, overlay.volumeLabels);
+      for (const badge of overlay.areaBadgeMap.values()) {
+        badge.labelObj.element.remove();
+        badge.labelObj.removeFromParent();
+      }
+      overlay.areaBadgeMap.clear();
+
+      for (const badge of overlay.volumeBadgeMap.values()) {
+        badge.labelObj.element.remove();
+        badge.labelObj.removeFromParent();
+      }
+      overlay.volumeBadgeMap.clear();
+      overlay.volumeGroup.clear();
+
       overlay.previewDim.visible = false;
       overlay.previewGuides.visible = false;
       overlay.hoverEdgeLine.visible = false;
@@ -2741,6 +2834,7 @@ const worldPointToGeoreferenced = async (
       void highlighterRef.current.clear('measure-volume');
       void highlighterRef.current.clear('measure-volume-hover');
     }
+    lastVolumeHoverKeyRef.current = null;
     worldRef.current?.renderer?.update();
   }, []);
 
@@ -2909,34 +3003,26 @@ const worldPointToGeoreferenced = async (
     []
   );
 
-  const updateAreaMeasureOverlay = useCallback(
-    (items: AreaFaceMeasurement[], hover: AreaFaceMeasurement | null = null) => {
+  const updateAreaSelectedOverlay = useCallback(
+    (items: AreaFaceMeasurement[]) => {
       const overlay = measureOverlayRef.current;
       const world = worldRef.current;
       if (!overlay || !world) return;
 
-      clearDynamicMeasureGroup(
-        overlay.areaGroup,
-        overlay.areaLabels,
-        overlay.areaDisposables
-      );
+      for (const item of overlay.areaDisposables) {
+        item.dispose();
+      }
+      overlay.areaDisposables.length = 0;
+      overlay.areaGroup.clear();
 
       const rendererSize = world.renderer?.getSize() ?? new THREE.Vector2(1, 1);
 
-      const addFaceSurface = (
-        face: AreaFaceMeasurement,
-        fillColor: number,
-        fillOpacity: number,
-        borderColor: number,
-        borderWidth: number,
-        depthTest: boolean
-      ) => {
+      for (const face of items) {
         const indices = face.triIndices
           ? face.triIndices
           : triangulatePlanarFace(face.facePoints, face.normal).flatIndices;
-        if (indices.length === 0) return;
+        if (indices.length === 0) continue;
 
-        // Slight offset along outward normal eliminates coplanar Z-fighting
         const offsetPos = new Float32Array(face.facePoints.length);
         const nx = face.normal.x * 0.003;
         const ny = face.normal.y * 0.003;
@@ -2953,18 +3039,18 @@ const worldPointToGeoreferenced = async (
         fillGeo.computeBoundingSphere();
 
         const fillMat = new THREE.MeshBasicMaterial({
-          color: fillColor,
+          color: 0x10b981,
           side: THREE.DoubleSide,
-          depthTest,
+          depthTest: true,
           polygonOffset: true,
           polygonOffsetFactor: -2,
           polygonOffsetUnits: -2,
           transparent: true,
-          opacity: fillOpacity,
+          opacity: 0.34,
         });
         const fillMesh = new THREE.Mesh(fillGeo, fillMat);
         fillMesh.frustumCulled = false;
-        fillMesh.renderOrder = depthTest ? 48 : 53;
+        fillMesh.renderOrder = 48;
         overlay.areaGroup.add(fillMesh);
         overlay.areaDisposables.push(fillGeo, fillMat);
 
@@ -2974,56 +3060,121 @@ const worldPointToGeoreferenced = async (
             const lineGeo = new LineGeometry();
             lineGeo.setPositions(loopPositions);
             const lineMat = new LineMaterial({
-              color: borderColor,
-              linewidth: borderWidth,
+              color: 0x34d399,
+              linewidth: 3,
               worldUnits: false,
-              depthTest,
+              depthTest: true,
               transparent: true,
               opacity: 0.96,
               resolution: new THREE.Vector2(rendererSize.x || 1, rendererSize.y || 1),
             });
             const lineObj = new Line2(lineGeo, lineMat);
             lineObj.frustumCulled = false;
-            lineObj.renderOrder = depthTest ? 49 : 54;
+            lineObj.renderOrder = 49;
             overlay.areaGroup.add(lineObj);
             overlay.areaDisposables.push(lineGeo, lineMat);
           }
         }
-      };
+      }
 
-      const selectedKeys = new Set(items.map((item) => item.key));
-      if (hover && !selectedKeys.has(hover.key)) {
-        addFaceSurface(hover, 0x38bdf8, 0.24, 0x38bdf8, 2.5, false);
+      // Re-attach persistent badges into areaGroup and sync text in place without unmounting
+      const currentKeys = new Set(items.map((it) => it.key));
+      for (const [key, badge] of overlay.areaBadgeMap.entries()) {
+        if (!currentKeys.has(key)) {
+          badge.labelObj.element.remove();
+          badge.labelObj.removeFromParent();
+          overlay.areaBadgeMap.delete(key);
+        }
       }
 
       const totalArea = items.reduce((sum, item) => sum + item.area, 0);
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        addFaceSurface(item, 0x10b981, 0.34, 0x34d399, 3, true);
-
         const isLatest = i === items.length - 1;
-        const label =
+        const primaryText =
           items.length > 1 && isLatest
-            ? createMeasureBadgeLabel(
-                `Total (${items.length}): ${formatDecimalEs(totalArea, 3)} m²`,
-                '#34d399',
-                `Cara: +${formatDecimalEs(item.area, 3)} m²`
-              )
-            : createMeasureBadgeLabel(
-                items.length > 1
-                  ? `+${formatDecimalEs(item.area, 3)} m²`
-                  : `${formatDecimalEs(item.area, 3)} m²`,
-                '#34d399'
-              );
+            ? `Total (${items.length}): ${formatDecimalEs(totalArea, 3)} m²`
+            : items.length > 1
+              ? `+${formatDecimalEs(item.area, 3)} m²`
+              : `${formatDecimalEs(item.area, 3)} m²`;
+        const secondaryText =
+          items.length > 1 && isLatest
+            ? `Cara: +${formatDecimalEs(item.area, 3)} m²`
+            : undefined;
 
-        label.position.copy(item.labelPoint);
-        overlay.areaGroup.add(label);
-        overlay.areaLabels.push(label);
+        let badge = overlay.areaBadgeMap.get(item.key);
+        if (badge) {
+          syncMeasureBadgeEntry(badge, primaryText, '#34d399', secondaryText);
+          badge.labelObj.position.copy(item.labelPoint);
+          if (badge.labelObj.parent !== overlay.areaGroup) {
+            overlay.areaGroup.add(badge.labelObj);
+          }
+        } else {
+          badge = createMeasureBadgeEntry(item.key, primaryText, '#34d399', secondaryText);
+          badge.labelObj.position.copy(item.labelPoint);
+          overlay.areaGroup.add(badge.labelObj);
+          overlay.areaBadgeMap.set(item.key, badge);
+        }
       }
 
       world.renderer?.update();
     },
     []
+  );
+
+  const updateAreaHoverOverlay = useCallback(
+    (hover: AreaFaceMeasurement | null) => {
+      const overlay = measureOverlayRef.current;
+      const world = worldRef.current;
+      if (!overlay || !world) return;
+
+      if (
+        hover &&
+        hover.facePoints &&
+        hover.facePoints.length >= 9 &&
+        !overlay.areaBadgeMap.has(hover.key)
+      ) {
+        const { flatIndices, loopPositions } = triangulatePlanarFace(
+          hover.facePoints,
+          hover.normal
+        );
+        if (flatIndices.length > 0) {
+          overlay.hoverAreaFill.geometry.setAttribute(
+            'position',
+            new THREE.Float32BufferAttribute(new Float32Array(hover.facePoints), 3)
+          );
+          overlay.hoverAreaFill.geometry.setIndex(flatIndices);
+          overlay.hoverAreaFill.geometry.computeBoundingSphere();
+          overlay.hoverAreaFill.visible = true;
+
+          if (loopPositions.length >= 6) {
+            overlay.hoverAreaOutline.geometry.setPositions(loopPositions);
+            overlay.hoverAreaOutline.geometry.computeBoundingSphere();
+            overlay.hoverAreaOutline.computeLineDistances();
+            overlay.hoverAreaOutline.visible = true;
+          } else {
+            overlay.hoverAreaOutline.visible = false;
+          }
+        } else {
+          overlay.hoverAreaFill.visible = false;
+          overlay.hoverAreaOutline.visible = false;
+        }
+      } else {
+        overlay.hoverAreaFill.visible = false;
+        overlay.hoverAreaOutline.visible = false;
+      }
+
+      world.renderer?.update();
+    },
+    []
+  );
+
+  const updateAreaMeasureOverlay = useCallback(
+    (items: AreaFaceMeasurement[], hover: AreaFaceMeasurement | null = null) => {
+      updateAreaSelectedOverlay(items);
+      updateAreaHoverOverlay(hover);
+    },
+    [updateAreaSelectedOverlay, updateAreaHoverOverlay]
   );
 
   const pickVolumeElementAtClientPoint = useCallback(
@@ -3125,22 +3276,57 @@ const worldPointToGeoreferenced = async (
     []
   );
 
-  const updateVolumeMeasureOverlay = useCallback(
-    async (
-      items: VolumeElementMeasurement[],
-      hover: VolumeElementMeasurement | null = null
-    ) => {
+  const lastVolumeHoverKeyRef = useRef<string | null>(null);
+  const volumeHoverReqIdRef = useRef<number>(0);
+
+  const updateVolumeSelectedOverlay = useCallback(
+    async (items: VolumeElementMeasurement[]) => {
       const overlay = measureOverlayRef.current;
       const highlighter = highlighterRef.current;
       const world = worldRef.current;
       if (!overlay || !world) return;
 
-      clearDynamicMeasureGroup(overlay.volumeGroup, overlay.volumeLabels);
+      const currentKeys = new Set(items.map((it) => it.key));
+      for (const [key, badge] of overlay.volumeBadgeMap.entries()) {
+        if (!currentKeys.has(key)) {
+          badge.labelObj.element.remove();
+          badge.labelObj.removeFromParent();
+          overlay.volumeBadgeMap.delete(key);
+        }
+      }
+
+      const totalVolume = items.reduce((sum, item) => sum + item.volume, 0);
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const isLatest = i === items.length - 1;
+        const primaryText =
+          items.length > 1 && isLatest
+            ? `Total (${items.length}): ${formatDecimalEs(totalVolume, 3)} m³`
+            : items.length > 1
+              ? `+${formatDecimalEs(item.volume, 3)} m³`
+              : `${formatDecimalEs(item.volume, 3)} m³`;
+        const secondaryText =
+          items.length > 1 && isLatest
+            ? `Elemento: +${formatDecimalEs(item.volume, 3)} m³`
+            : undefined;
+
+        let badge = overlay.volumeBadgeMap.get(item.key);
+        if (badge) {
+          syncMeasureBadgeEntry(badge, primaryText, '#34d399', secondaryText);
+          badge.labelObj.position.copy(item.center);
+          if (badge.labelObj.parent !== overlay.volumeGroup) {
+            overlay.volumeGroup.add(badge.labelObj);
+          }
+        } else {
+          badge = createMeasureBadgeEntry(item.key, primaryText, '#34d399', secondaryText);
+          badge.labelObj.position.copy(item.center);
+          overlay.volumeGroup.add(badge.labelObj);
+          overlay.volumeBadgeMap.set(item.key, badge);
+        }
+      }
 
       const selectedMap: OBC.ModelIdMap = {};
-      const selectedKeys = new Set<string>();
       for (const item of items) {
-        selectedKeys.add(item.key);
         if (!selectedMap[item.modelId]) {
           selectedMap[item.modelId] = new Set<number>();
         }
@@ -3153,45 +3339,53 @@ const worldPointToGeoreferenced = async (
         } else {
           await highlighter.clear('measure-volume');
         }
-
-        if (hover && !selectedKeys.has(hover.key)) {
-          await highlighter.highlightByID(
-            'measure-volume-hover',
-            { [hover.modelId]: new Set([hover.localId]) },
-            true,
-            false
-          );
-        } else {
-          await highlighter.clear('measure-volume-hover');
-        }
-      }
-
-      const totalVolume = items.reduce((sum, item) => sum + item.volume, 0);
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        const isLatest = i === items.length - 1;
-        const label =
-          items.length > 1 && isLatest
-            ? createMeasureBadgeLabel(
-                `Total (${items.length}): ${formatDecimalEs(totalVolume, 3)} m³`,
-                '#34d399',
-                `Elemento: +${formatDecimalEs(item.volume, 3)} m³`
-              )
-            : createMeasureBadgeLabel(
-                items.length > 1
-                  ? `+${formatDecimalEs(item.volume, 3)} m³`
-                  : `${formatDecimalEs(item.volume, 3)} m³`,
-                '#34d399'
-              );
-
-        label.position.copy(item.center);
-        overlay.volumeGroup.add(label);
-        overlay.volumeLabels.push(label);
       }
 
       world.renderer?.update();
     },
     []
+  );
+
+  const updateVolumeHoverOverlay = useCallback(
+    async (hover: VolumeElementMeasurement | null) => {
+      const overlay = measureOverlayRef.current;
+      const highlighter = highlighterRef.current;
+      const world = worldRef.current;
+      if (!overlay || !highlighter || !world) return;
+
+      const hoverKey = hover?.key ?? null;
+      if (hoverKey === lastVolumeHoverKeyRef.current) return;
+      lastVolumeHoverKeyRef.current = hoverKey;
+
+      const reqId = ++volumeHoverReqIdRef.current;
+
+      if (hover && !overlay.volumeBadgeMap.has(hover.key)) {
+        await highlighter.highlightByID(
+          'measure-volume-hover',
+          { [hover.modelId]: new Set([hover.localId]) },
+          true,
+          false
+        );
+      } else {
+        await highlighter.clear('measure-volume-hover');
+      }
+
+      if (reqId === volumeHoverReqIdRef.current) {
+        world.renderer?.update();
+      }
+    },
+    []
+  );
+
+  const updateVolumeMeasureOverlay = useCallback(
+    async (
+      items: VolumeElementMeasurement[],
+      hover: VolumeElementMeasurement | null = null
+    ) => {
+      await updateVolumeSelectedOverlay(items);
+      await updateVolumeHoverOverlay(hover);
+    },
+    [updateVolumeSelectedOverlay, updateVolumeHoverOverlay]
   );
 
   const setCameraProjection = useCallback(
@@ -3249,8 +3443,12 @@ const worldPointToGeoreferenced = async (
         removeLastMeasurement,
         clearMeasurements,
         pickAreaFaceAtClientPoint,
+        updateAreaSelectedOverlay,
+        updateAreaHoverOverlay,
         updateAreaMeasureOverlay,
         pickVolumeElementAtClientPoint,
+        updateVolumeSelectedOverlay,
+        updateVolumeHoverOverlay,
         updateVolumeMeasureOverlay,
         setCameraProjection,
       }}
