@@ -22,10 +22,8 @@ function getUserInitials(displayName?: string, email?: string): string {
 
 export const RibbonToolbar: React.FC = () => {
   const adminMenuRef = useRef<HTMLDivElement | null>(null);
-  const measureBtnRef = useRef<HTMLButtonElement | null>(null);
+  const measureGroupRef = useRef<HTMLDivElement | null>(null);
   const measureMenuRef = useRef<HTMLDivElement | null>(null);
-  const measureHoldTimerRef = useRef<number | null>(null);
-  const measureHoldTriggeredRef = useRef(false);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
   const [modalInitialTab, setModalInitialTab] =
     useState<ProjectManagementTab>('overview');
@@ -172,21 +170,6 @@ export const RibbonToolbar: React.FC = () => {
     setIsProjectModalOpen(true);
   };
 
-  const clearMeasureHoldTimer = () => {
-    if (measureHoldTimerRef.current !== null) {
-      window.clearTimeout(measureHoldTimerRef.current);
-      measureHoldTimerRef.current = null;
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      if (measureHoldTimerRef.current !== null) {
-        window.clearTimeout(measureHoldTimerRef.current);
-      }
-    };
-  }, []);
-
   useEffect(() => {
     if (!isMeasureMenuOpen) return;
 
@@ -195,7 +178,7 @@ export const RibbonToolbar: React.FC = () => {
       if (
         target instanceof Node &&
         (measureMenuRef.current?.contains(target) ||
-          measureBtnRef.current?.contains(target))
+          measureGroupRef.current?.contains(target))
       ) {
         return;
       }
@@ -220,8 +203,12 @@ export const RibbonToolbar: React.FC = () => {
     };
   }, [isMeasureMenuOpen]);
 
-  const openMeasureModeMenu = () => {
-    const rect = measureBtnRef.current?.getBoundingClientRect();
+  const toggleMeasureModeMenu = () => {
+    if (isMeasureMenuOpen) {
+      setIsMeasureMenuOpen(false);
+      return;
+    }
+    const rect = measureGroupRef.current?.getBoundingClientRect();
     if (!rect) return;
     const menuWidth = 232;
     setMeasureMenuPos({
@@ -231,17 +218,6 @@ export const RibbonToolbar: React.FC = () => {
     setIsMeasureMenuOpen(true);
   };
 
-  const handleMeasurePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
-    if (!isEngineReady || e.button !== 0) return;
-    clearMeasureHoldTimer();
-    measureHoldTriggeredRef.current = false;
-    measureHoldTimerRef.current = window.setTimeout(() => {
-      measureHoldTimerRef.current = null;
-      measureHoldTriggeredRef.current = true;
-      openMeasureModeMenu();
-    }, 380);
-  };
-
   const handleSelectMeasureMode = (mode: MeasureMode) => {
     setMeasureMode(mode);
     setActiveTool('measure');
@@ -249,10 +225,6 @@ export const RibbonToolbar: React.FC = () => {
   };
 
   const toggleMeasureTool = () => {
-    if (measureHoldTriggeredRef.current) {
-      measureHoldTriggeredRef.current = false;
-      return;
-    }
     setIsMeasureMenuOpen(false);
     setActiveTool(activeTool === 'measure' ? 'select' : 'measure');
   };
@@ -320,89 +292,116 @@ export const RibbonToolbar: React.FC = () => {
 
         {/* Center 3D Viewer Tools */}
         <div className="flex items-center gap-1 bg-asphalt-900 border border-asphalt-700 rounded-md px-1.5 py-1 min-w-0 overflow-x-auto">
-          <button
-            ref={measureBtnRef}
-            type="button"
-            onClick={toggleMeasureTool}
-            onPointerDown={handleMeasurePointerDown}
-            onPointerUp={clearMeasureHoldTimer}
-            onPointerLeave={clearMeasureHoldTimer}
-            onPointerCancel={clearMeasureHoldTimer}
-            onContextMenu={(e) => {
-              if (!isEngineReady) return;
-              e.preventDefault();
-              openMeasureModeMenu();
-            }}
-            disabled={!isEngineReady}
-            aria-pressed={activeTool === 'measure'}
-            aria-haspopup="menu"
-            aria-expanded={isMeasureMenuOpen}
-            className={`${toolBtnClass(activeTool === 'measure')} whitespace-nowrap shrink-0 disabled:opacity-40`}
-            title={
+          {/* Measure Split Button */}
+          <div
+            ref={measureGroupRef}
+            className={`inline-flex items-stretch rounded transition-colors ${
               activeTool === 'measure'
-                ? 'Desactivar medición (Esc) · Mantén pulsado para cambiar entre Distancia, Área y Volumen'
-                : 'Medir (mantén pulsado para elegir Distancia, Área o Volumen)'
-            }
+                ? 'bg-pavasal-500 text-asphalt-950 font-semibold shadow-sm'
+                : 'text-asphalt-200 font-medium hover:bg-asphalt-800'
+            }`}
           >
-            {measureMode === 'area' ? (
-              <svg
-                className="w-3.5 h-3.5 shrink-0"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M2.5 3.5h11v9h-11z" />
-                <path d="M2.5 8h11M8 3.5v9" opacity="0.55" />
-              </svg>
-            ) : measureMode === 'volume' ? (
-              <svg
-                className="w-3.5 h-3.5 shrink-0"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M8 1.8 13.5 5v6L8 14.2 2.5 11V5L8 1.8Z" />
-                <path d="M8 8v6.2M8 8 13.5 5M8 8 2.5 5" />
-              </svg>
-            ) : (
-              <svg
-                className="w-3.5 h-3.5 shrink-0"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M11.2 1.8l3 3-9.4 9.4-3-3 9.4-9.4Z" />
-                <path d="M8.85 4.15l1.2 1.2M6.5 6.5l1.6 1.6M4.15 8.85l1.2 1.2" />
-              </svg>
-            )}
-            <span>
-              {measureMode === 'area'
-                ? 'Área'
-                : measureMode === 'volume'
-                  ? 'Volumen'
-                  : 'Medir'}
-            </span>
-            <svg
-              className="w-2.5 h-2.5 shrink-0 opacity-75"
-              viewBox="0 0 10 10"
-              fill="currentColor"
-              aria-hidden="true"
+            {/* Primary Action: Run / Toggle current measure mode */}
+            <button
+              type="button"
+              onClick={toggleMeasureTool}
+              disabled={!isEngineReady}
+              aria-pressed={activeTool === 'measure'}
+              className="px-2.5 py-1.5 flex items-center gap-1.5 text-xs whitespace-nowrap disabled:opacity-40 rounded-l hover:bg-black/10 transition-colors"
+              title={
+                activeTool === 'measure'
+                  ? `Desactivar medición de ${
+                      measureMode === 'area'
+                        ? 'Área'
+                        : measureMode === 'volume'
+                          ? 'Volumen'
+                          : 'Medir'
+                    } (Esc)`
+                  : `${
+                      measureMode === 'area'
+                        ? 'Medir Área'
+                        : measureMode === 'volume'
+                          ? 'Medir Volumen'
+                          : 'Medir'
+                    } (clic para activar)`
+              }
             >
-              <path d="M2.2 3.6 5 6.6l2.8-3H2.2Z" />
-            </svg>
-          </button>
+              {measureMode === 'area' ? (
+                <svg
+                  className="w-3.5 h-3.5 shrink-0"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M2.5 3.5h11v9h-11z" />
+                  <path d="M2.5 8h11M8 3.5v9" opacity="0.55" />
+                </svg>
+              ) : measureMode === 'volume' ? (
+                <svg
+                  className="w-3.5 h-3.5 shrink-0"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M8 1.8 13.5 5v6L8 14.2 2.5 11V5L8 1.8Z" />
+                  <path d="M8 8v6.2M8 8 13.5 5M8 8 2.5 5" />
+                </svg>
+              ) : (
+                <svg
+                  className="w-3.5 h-3.5 shrink-0"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M11.2 1.8l3 3-9.4 9.4-3-3 9.4-9.4Z" />
+                  <path d="M8.85 4.15l1.2 1.2M6.5 6.5l1.6 1.6M4.15 8.85l1.2 1.2" />
+                </svg>
+              )}
+              <span>
+                {measureMode === 'area'
+                  ? 'Área'
+                  : measureMode === 'volume'
+                    ? 'Volumen'
+                    : 'Medir'}
+              </span>
+            </button>
+
+            {/* Dropdown Arrow: Select other measurement options */}
+            <button
+              type="button"
+              onClick={toggleMeasureModeMenu}
+              disabled={!isEngineReady}
+              aria-haspopup="menu"
+              aria-expanded={isMeasureMenuOpen}
+              className={`px-1.5 py-1.5 flex items-center justify-center border-l transition-colors rounded-r disabled:opacity-40 hover:bg-black/15 ${
+                activeTool === 'measure'
+                  ? 'border-asphalt-950/20 text-asphalt-950 hover:bg-black/10'
+                  : 'border-asphalt-700/70 text-asphalt-300 hover:text-white'
+              }`}
+              title="Elegir tipo de medición (Medir, Área, Volumen)"
+            >
+              <svg
+                className={`w-3 h-3 transition-transform ${isMeasureMenuOpen ? 'rotate-180' : ''}`}
+                viewBox="0 0 10 10"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d="M2.2 3.6 5 6.6l2.8-3H2.2Z" />
+              </svg>
+            </button>
+          </div>
 
           <button
             type="button"
@@ -831,9 +830,9 @@ export const RibbonToolbar: React.FC = () => {
               <path d="M8.85 4.15l1.2 1.2M6.5 6.5l1.6 1.6M4.15 8.85l1.2 1.2" />
             </svg>
             <div className="min-w-0">
-              <div className="font-semibold">Distancia</div>
+              <div className="font-semibold">Medir</div>
               <div className="text-[10px] text-asphalt-400">
-                Vértices, aristas y planos
+                Distancia entre vértices, aristas y planos
               </div>
             </div>
           </button>
