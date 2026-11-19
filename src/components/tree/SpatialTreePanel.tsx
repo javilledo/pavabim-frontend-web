@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type * as FRAGS from '@thatopen/fragments';
 import { useLocalFragUpload } from '../../hooks/useLocalFragUpload';
 import { useViewerStore } from '../../store/useViewerStore';
@@ -93,8 +93,13 @@ const TreeNode: React.FC<TreeNodeProps> = ({
 
 export const SpatialTreePanel: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const { loadedModels, isLoadingModel, selectedElementId, selectedModelId } =
-    useViewerStore();
+  const {
+    loadedModels,
+    isLoadingModel,
+    selectedElementId,
+    selectedModelId,
+    currentProjectId,
+  } = useViewerStore();
   const { fragments, focusElement } = useEngine();
   const { isEngineReady, loadLocalFragFiles } = useLocalFragUpload();
   const [trees, setTrees] = useState<
@@ -102,11 +107,23 @@ export const SpatialTreePanel: React.FC = () => {
   >([]);
   const [isLoading, setIsLoading] = useState(false);
 
+  const projectLoadedModels = useMemo(
+    () =>
+      loadedModels.filter(
+        (m) => (!m.projectId || m.projectId === currentProjectId) && m.visible,
+      ),
+    [loadedModels, currentProjectId],
+  );
+
   useEffect(() => {
     let active = true;
 
     const loadTrees = async () => {
-      if (!fragments || !fragments.initialized || loadedModels.length === 0) {
+      if (
+        !fragments ||
+        !fragments.initialized ||
+        projectLoadedModels.length === 0
+      ) {
         setTrees([]);
         return;
       }
@@ -118,7 +135,7 @@ export const SpatialTreePanel: React.FC = () => {
         tree: FRAGS.SpatialTreeItem;
       }> = [];
 
-      for (const info of loadedModels) {
+      for (const info of projectLoadedModels) {
         const model = fragments.list.get(info.id);
         if (model) {
           try {
@@ -150,9 +167,9 @@ export const SpatialTreePanel: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [fragments, loadedModels]);
+  }, [fragments, projectLoadedModels]);
 
-  if (loadedModels.length === 0) {
+  if (projectLoadedModels.length === 0) {
     return (
       <div className="text-center text-xs text-asphalt-300 mt-8 px-4 space-y-3">
         <input

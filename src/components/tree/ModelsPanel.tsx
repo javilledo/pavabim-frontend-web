@@ -136,7 +136,11 @@ export const ModelsPanel: React.FC = () => {
   const readyModels = projectModels.filter((m) => m.status === 'READY');
   const pendingReadyModels = readyModels.filter((m) => {
     const targetId = m.ifcFileId || m.modelName;
-    return !loadedModels.some((loaded) => loaded.id === targetId);
+    return !loadedModels.some(
+      (loaded) =>
+        loaded.id === targetId &&
+        (!loaded.projectId || loaded.projectId === projectId),
+    );
   });
 
   const handleLoadAllModels = async () => {
@@ -296,7 +300,11 @@ export const ModelsPanel: React.FC = () => {
           <div className="space-y-1">
             {projectModels.map((model) => {
             const targetId = model.ifcFileId || model.modelName;
-            const loadedModel = loadedModels.find((m) => m.id === targetId);
+            const loadedModel = loadedModels.find(
+              (m) =>
+                m.id === targetId &&
+                (!m.projectId || m.projectId === projectId),
+            );
             const isLoaded = Boolean(loadedModel);
             const isVisible = loadedModel?.visible ?? false;
             const isLoadingThis = loadingModelKey === model.modelName;

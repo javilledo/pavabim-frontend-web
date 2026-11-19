@@ -16,6 +16,7 @@ export interface LoadedModel {
   id: string;
   name: string;
   visible: boolean;
+  userVisible?: boolean;
   source?: 'local' | 'remote';
   ifcFileId?: string;
   fragModifiedTime?: string;
@@ -94,6 +95,7 @@ interface ViewerState {
   removeLoadedModel: (modelId: string) => void;
   clearLoadedModels: () => void;
   toggleModelVisibility: (modelId: string) => void;
+  setModelVisibility: (modelId: string, visible: boolean) => void;
   showAllModels: () => void;
   setSelectedElement: (
     elementId: string | null,
@@ -165,15 +167,17 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
 
   addLoadedModel: (model) =>
     set((state) => {
+      const userVisible = model.userVisible ?? model.visible;
+      const modelWithUserVisible = { ...model, userVisible };
       const exists = state.loadedModels.some((m) => m.id === model.id);
       if (exists) {
         return {
           loadedModels: state.loadedModels.map((m) =>
-            m.id === model.id ? { ...m, ...model } : m,
+            m.id === model.id ? { ...m, ...modelWithUserVisible } : m,
           ),
         };
       }
-      return { loadedModels: [...state.loadedModels, model] };
+      return { loadedModels: [...state.loadedModels, modelWithUserVisible] };
     }),
 
   removeLoadedModel: (modelId) =>
@@ -221,17 +225,42 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
 
   toggleModelVisibility: (modelId) =>
     set((state) => ({
+      loadedModels: state.loadedModels.map((m) => {
+        if (m.id !== modelId) return m;
+        const nextVisible = !m.visible;
+        return {
+          ...m,
+          visible: nextVisible,
+          userVisible: nextVisible,
+        };
+      }),
+    })),
+
+  setModelVisibility: (modelId, visible) =>
+    set((state) => ({
       loadedModels: state.loadedModels.map((m) =>
-        m.id === modelId ? { ...m, visible: !m.visible } : m,
+        m.id === modelId
+          ? {
+              ...m,
+              visible,
+              userVisible: visible,
+            }
+          : m,
       ),
     })),
 
   showAllModels: () =>
-    set((state) => ({
-      loadedModels: state.loadedModels.map((m) =>
-        m.visible ? m : { ...m, visible: true },
-      ),
-    })),
+    set((state) => {
+      const currentProjId = state.currentProjectId;
+      return {
+        loadedModels: state.loadedModels.map((m) => {
+          const belongsToCurrent =
+            !m.projectId || m.projectId === currentProjId;
+          if (!belongsToCurrent) return m;
+          return { ...m, visible: true, userVisible: true };
+        }),
+      };
+    }),
 
   setSelectedElement: (elementId, modelId, properties = null) => {
     const parsedId = elementId !== null ? Number(elementId) : NaN;
@@ -307,13 +336,38 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   setCurrentProject: (project) => {
     const prevId = get().currentProjectId;
     const nextId = project?.id ?? null;
+    const isProjectChanged = prevId !== nextId;
     saveProjectId(nextId);
-    set((state) => ({
-      currentProject: project,
-      currentProjectId: nextId,
-      activeBcfTopicId: prevId !== nextId ? null : state.activeBcfTopicId,
-      remoteModels: prevId !== nextId ? [] : state.remoteModels,
-    }));
+    set((state) => {
+      const nextLoadedModels = isProjectChanged
+        ? state.loadedModels.map((m) => {
+            if (!m.projectId) return m;
+            const belongsToNext = m.projectId === nextId;
+            return {
+              ...m,
+              visible: belongsToNext ? (m.userVisible ?? true) : false,
+            };
+          })
+        : state.loadedModels;
+
+      return {
+        currentProject: project,
+        currentProjectId: nextId,
+        activeBcfTopicId: isProjectChanged ? null : state.activeBcfTopicId,
+        remoteModels: isProjectChanged ? [] : state.remoteModels,
+        loadedModels: nextLoadedModels,
+        ...(isProjectChanged
+          ? {
+              selectedElementId: null,
+              selectedModelId: null,
+              selectedElementProperties: null,
+              selectedElementsMap: {},
+              hiddenElementsMap: {},
+              isIsolationActive: false,
+            }
+          : {}),
+      };
+    });
   },
 
   setCurrentProjectById: (projectId) => {
@@ -329,12 +383,21 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
 
   resetProjectContext: () => {
     saveProjectId(null);
-    set({
+    set((state) => ({
       projects: [],
       currentProjectId: null,
       currentProject: null,
       remoteModels: [],
       activeBcfTopicId: null,
-    });
+      loadedModels: state.loadedModels.map((m) =>
+        m.projectId ? { ...m, visible: false } : m,
+      ),
+      selectedElementId: null,
+      selectedModelId: null,
+      selectedElementProperties: null,
+      selectedElementsMap: {},
+      hiddenElementsMap: {},
+      isIsolationActive: false,
+    }));
   },
 }));

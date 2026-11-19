@@ -92,6 +92,15 @@ export const RibbonToolbar: React.FC = () => {
     [hiddenElementsMap],
   );
 
+  const currentProjectId = currentProject?.id || null;
+  const activeProjectLoadedModels = useMemo(
+    () =>
+      loadedModels.filter(
+        (m) => !m.projectId || m.projectId === currentProjectId,
+      ),
+    [loadedModels, currentProjectId],
+  );
+
   const projectsQuery = useQuery({
     queryKey: ['projects', user?.uid],
     queryFn: () => projectsService.listProjects(),
@@ -548,11 +557,11 @@ export const RibbonToolbar: React.FC = () => {
           <button
             type="button"
             onClick={() => void showAllElements()}
-            disabled={!isEngineReady || loadedModels.length === 0}
+            disabled={!isEngineReady || activeProjectLoadedModels.length === 0}
             className={`px-2.5 py-1.5 rounded text-xs font-medium disabled:opacity-40 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               hiddenCount > 0 ||
               isIsolationActive ||
-              loadedModels.some((m) => !m.visible)
+              activeProjectLoadedModels.some((m) => !m.visible)
                 ? 'bg-pavasal-500/15 border border-pavasal-500/50 text-pavasal-400 hover:bg-pavasal-500 hover:text-asphalt-950'
                 : 'text-asphalt-200 hover:bg-asphalt-800 hover:text-white'
             }`}

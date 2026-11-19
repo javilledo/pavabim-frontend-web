@@ -310,6 +310,16 @@ function getVisibleModelsBounds(fragments: OBC.FragmentsManager | null): THREE.B
   return hasBox && !combinedBox.isEmpty() ? combinedBox : null;
 }
 
+function setModelHierarchyVisibility(
+  model: FRAGS.FragmentsModel,
+  visible: boolean
+): void {
+  model.object.visible = visible;
+  model.object.traverse((child) => {
+    child.visible = visible;
+  });
+}
+
 function computeWorldFocalOffset(
   centerPos: THREE.Vector3,
   targetPos: THREE.Vector3,
@@ -730,12 +740,13 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     addLoadedModel,
     removeLoadedModel,
     clearLoadedModels,
-    toggleModelVisibility: toggleStoreModelVisibility,
+    setModelVisibility: setStoreModelVisibility,
     showAllModels: showAllStoreModels,
     toggleGrid: toggleStoreGrid,
     toggleSection: toggleStoreSection,
     setSectionActive: setStoreSectionActive,
     setCameraProjection: setStoreCameraProjection,
+    currentProjectId,
   } = useViewerStore();
 
   const activeToolRef = useRef(activeTool);
@@ -1495,8 +1506,15 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           });
         }
 
-        const initialVisible = options?.initialVisible ?? true;
-        model.object.visible = initialVisible;
+        const currentActiveProjectId =
+          useViewerStore.getState().currentProjectId;
+        const belongsToActiveProject =
+          !options?.projectId || options.projectId === currentActiveProjectId;
+        const initialVisible = belongsToActiveProject
+          ? (options?.initialVisible ?? true)
+          : false;
+
+        setModelHierarchyVisibility(model, initialVisible);
         world.scene.three.add(model.object);
         await fragments.core.update(true);
 
@@ -1504,42 +1522,45 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           id: modelId,
           name: modelName,
           visible: initialVisible,
+          userVisible: options?.initialVisible ?? true,
           source,
           fragModifiedTime: options?.fragModifiedTime,
           projectId: options?.projectId,
           downloadUrl,
         });
 
-        // Fit camera to loaded model
-        try {
-          const box =
-            model.box && !model.box.isEmpty()
-              ? model.box.clone()
-              : new THREE.Box3().setFromObject(model.object);
+        // Fit camera to loaded model only if it belongs to the active project
+        if (belongsToActiveProject) {
+          try {
+            const box =
+              model.box && !model.box.isEmpty()
+                ? model.box.clone()
+                : new THREE.Box3().setFromObject(model.object);
 
-          if (!box.isEmpty()) {
-            const size = box.getSize(new THREE.Vector3());
-            const maxExtent = Math.max(size.x, size.y, size.z);
-            if (Number.isFinite(maxExtent) && maxExtent > 0) {
-              const dynamicFar = Math.max(2500, maxExtent * 10);
-              world.camera.threePersp.far = dynamicFar;
-              world.camera.threePersp.updateProjectionMatrix();
-              world.camera.threeOrtho.far = dynamicFar;
-              world.camera.threeOrtho.updateProjectionMatrix();
-            }
+            if (!box.isEmpty()) {
+              const size = box.getSize(new THREE.Vector3());
+              const maxExtent = Math.max(size.x, size.y, size.z);
+              if (Number.isFinite(maxExtent) && maxExtent > 0) {
+                const dynamicFar = Math.max(2500, maxExtent * 10);
+                world.camera.threePersp.far = dynamicFar;
+                world.camera.threePersp.updateProjectionMatrix();
+                world.camera.threeOrtho.far = dynamicFar;
+                world.camera.threeOrtho.updateProjectionMatrix();
+              }
 
-            if (!options?.skipCameraFit) {
-              await world.camera.controls.fitToBox(box, true, {
-                paddingLeft: 2,
-                paddingRight: 2,
-                paddingBottom: 2,
-                paddingTop: 2,
-              });
-              await fragments.core.update(true);
+              if (!options?.skipCameraFit) {
+                await world.camera.controls.fitToBox(box, true, {
+                  paddingLeft: 2,
+                  paddingRight: 2,
+                  paddingBottom: 2,
+                  paddingTop: 2,
+                });
+                await fragments.core.update(true);
+              }
             }
+          } catch (err) {
+            console.warn('[EngineContext] Camera fit error:', err);
           }
-        } catch (err) {
-          console.warn('[EngineContext] Camera fit error:', err);
         }
 
         return model;
@@ -1557,11 +1578,12 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
       const model = fragments.list.get(modelId);
       if (model) {
-        model.object.visible = visible;
-        toggleStoreModelVisibility(modelId);
+        setModelHierarchyVisibility(model, visible);
+        void fragments.core.update(true);
       }
+      setStoreModelVisibility(modelId, visible);
     },
-    [toggleStoreModelVisibility]
+    [setStoreModelVisibility]
   );
 
   const removeModel = useCallback(
@@ -1783,9 +1805,23 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     if (!components) return;
 
     const fragments = fragmentsRef.current;
+    const currentProjId = useViewerStore.getState().currentProjectId;
+    const loadedModels = useViewerStore.getState().loadedModels;
+    const modelMetaMap = new Map(loadedModels.map((m) => [m.id, m]));
+
     if (fragments && fragments.initialized) {
-      for (const [, model] of fragments.list) {
-        model.object.visible = true;
+      let changed = false;
+      for (const [id, model] of fragments.list) {
+        const meta = modelMetaMap.get(id);
+        const belongsToCurrent =
+          !meta?.projectId || meta.projectId === currentProjId;
+        if (belongsToCurrent) {
+          setModelHierarchyVisibility(model, true);
+          changed = true;
+        }
+      }
+      if (changed) {
+        await fragments.core.update(true);
       }
     }
 
@@ -2837,6 +2873,114 @@ const worldPointToGeoreferenced = async (
     lastVolumeHoverKeyRef.current = null;
     worldRef.current?.renderer?.update();
   }, []);
+
+  const prevProjectIdRef = useRef<string | null>(currentProjectId);
+
+  // Synchronize 3D engine model visibility & reset tools/overlays when project changes
+  useEffect(() => {
+    if (!isEngineReady || !worldRef.current) {
+      prevProjectIdRef.current = currentProjectId;
+      return;
+    }
+
+    if (prevProjectIdRef.current === currentProjectId) {
+      return;
+    }
+
+    prevProjectIdRef.current = currentProjectId;
+
+    const syncEngineToProject = async () => {
+      const fragments = fragmentsRef.current;
+      const world = worldRef.current;
+      const components = componentsRef.current;
+      if (!fragments || !world) return;
+
+      // 1. Clear highlighters
+      if (highlighterRef.current) {
+        await highlighterRef.current.clear('select').catch(() => {});
+        await highlighterRef.current.clear('measure-volume').catch(() => {});
+        await highlighterRef.current.clear('measure-volume-hover').catch(() => {});
+      }
+
+      // 2. Clear clipper planes
+      if (clipperRef.current) {
+        clipperRef.current.deleteAll();
+        clipperRef.current.enabled = false;
+        setStoreSectionActive(false);
+      }
+
+      // 3. Reset hider
+      if (components) {
+        try {
+          const hider = components.get(OBC.Hider);
+          await hider.set(true);
+        } catch {
+          // ignore
+        }
+      }
+
+      // 4. Clear measurements & overlays
+      clearMeasurements();
+
+      // 5. Update visibility of each loaded model in Three.js
+      const loadedModels = useViewerStore.getState().loadedModels;
+      let hasVisibilityChange = false;
+
+      for (const info of loadedModels) {
+        const fragModel = fragments.list.get(info.id);
+        if (!fragModel) continue;
+
+        if (info.projectId) {
+          const belongsToCurrent = info.projectId === currentProjectId;
+          const targetVisible = belongsToCurrent
+            ? (info.userVisible ?? true)
+            : false;
+          if (fragModel.object.visible !== targetVisible) {
+            setModelHierarchyVisibility(fragModel, targetVisible);
+            hasVisibilityChange = true;
+          }
+        }
+      }
+
+      if (hasVisibilityChange) {
+        await fragments.core.update(true);
+      }
+
+      // 6. Camera fit to visible models of the newly active project (if any)
+      try {
+        const combinedBox = getVisibleModelsBounds(fragments);
+        if (combinedBox && !combinedBox.isEmpty()) {
+          const size = combinedBox.getSize(new THREE.Vector3());
+          const maxExtent = Math.max(size.x, size.y, size.z);
+          if (Number.isFinite(maxExtent) && maxExtent > 0) {
+            const dynamicFar = Math.max(2500, maxExtent * 10);
+            world.camera.threePersp.far = dynamicFar;
+            world.camera.threePersp.updateProjectionMatrix();
+            world.camera.threeOrtho.far = dynamicFar;
+            world.camera.threeOrtho.updateProjectionMatrix();
+          }
+          await world.camera.controls.fitToBox(combinedBox, true, {
+            paddingLeft: 2,
+            paddingRight: 2,
+            paddingBottom: 2,
+            paddingTop: 2,
+          });
+          await fragments.core.update(true);
+        } else {
+          await world.camera.controls.setLookAt(15, 12, 15, 0, 0, 0, true);
+        }
+      } catch (err) {
+        console.warn(
+          '[EngineContext] Project switch camera adjustment warning:',
+          err,
+        );
+      }
+
+      world.renderer?.update();
+    };
+
+    void syncEngineToProject();
+  }, [clearMeasurements, currentProjectId, isEngineReady, setStoreSectionActive]);
 
   const pickAreaFaceAtClientPoint = useCallback(
     async (clientX: number, clientY: number): Promise<AreaFaceMeasurement | null> => {

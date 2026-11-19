@@ -124,6 +124,7 @@ export const ElementsTreePanel: React.FC = () => {
     selectedModelId,
     selectedElementsMap,
     hiddenElementsMap,
+    currentProjectId,
   } = useViewerStore();
   const { fragments, focusElement, focusSelectionMap, toggleSelectionMap } =
     useEngine();
@@ -148,9 +149,17 @@ export const ElementsTreePanel: React.FC = () => {
     return keys;
   }, [hiddenElementsMap]);
 
+  const projectLoadedModels = useMemo(
+    () =>
+      loadedModels.filter(
+        (m) => !m.projectId || m.projectId === currentProjectId,
+      ),
+    [loadedModels, currentProjectId],
+  );
+
   const visibleModels = useMemo(
-    () => loadedModels.filter((m) => m.visible),
-    [loadedModels],
+    () => projectLoadedModels.filter((m) => m.visible),
+    [projectLoadedModels],
   );
 
   const visibleModelsKey = useMemo(
@@ -520,7 +529,7 @@ export const ElementsTreePanel: React.FC = () => {
     void focusSelectionMap(target.selectionByModel, true);
   }, [contextMenu, focusSelectionMap]);
 
-  if (loadedModels.length === 0) {
+  if (projectLoadedModels.length === 0) {
     return (
       <div className="rounded border border-asphalt-800 bg-asphalt-950/50 p-3 text-center text-[11px] text-asphalt-400 leading-relaxed">
         Carga al menos un modelo desde la pestaña{' '}

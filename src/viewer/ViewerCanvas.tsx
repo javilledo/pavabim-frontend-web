@@ -72,6 +72,7 @@ export const ViewerCanvas: React.FC = () => {
     loadingModelName,
     viewerToastError,
     selectedElementsMap,
+    currentProjectId,
     setActiveTool,
     setViewerToastError,
   } = useViewerStore();
@@ -358,8 +359,13 @@ export const ViewerCanvas: React.FC = () => {
     updateVolumeHoverOverlay,
   ]);
 
+  const hasVisibleModels = useMemo(
+    () => loadedModels.some((m) => m.visible),
+    [loadedModels],
+  );
+
   useEffect(() => {
-    if (loadedModels.length === 0) {
+    if (!hasVisibleModels) {
       setPickedCoordinate(null);
       setHoverCoordinate(null);
       setAnchorMeasureTarget(null);
@@ -369,7 +375,18 @@ export const ViewerCanvas: React.FC = () => {
       setVolumeItems([]);
       setHoverVolumeElement(null);
     }
-  }, [loadedModels.length]);
+  }, [hasVisibleModels]);
+
+  useEffect(() => {
+    setPickedCoordinate(null);
+    setHoverCoordinate(null);
+    setAnchorMeasureTarget(null);
+    setHoverMeasureTarget(null);
+    setAreaItems([]);
+    setHoverAreaFace(null);
+    setVolumeItems([]);
+    setHoverVolumeElement(null);
+  }, [currentProjectId]);
 
   useEffect(() => {
     if (!copiedCoordinateText) return;
@@ -829,7 +846,7 @@ export const ViewerCanvas: React.FC = () => {
       )}
 
       {/* Empty Viewport Interactive CTA (works without selecting a project) */}
-      {isEngineReady && loadedModels.length === 0 && !isDraggingFile && !isLoadingModel && (
+      {isEngineReady && !hasVisibleModels && !isDraggingFile && !isLoadingModel && (
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10">
           <div className="bg-asphalt-900/95 backdrop-blur border border-asphalt-700 px-4 py-2.5 rounded-xl text-xs text-asphalt-200 shadow-2xl flex items-center gap-3">
             <span className="w-2 h-2 rounded-full bg-pavasal-500 animate-pulse shrink-0" />
@@ -1071,7 +1088,7 @@ export const ViewerCanvas: React.FC = () => {
       ) : (
         isEngineReady &&
         activeTool === 'coordinates' &&
-        loadedModels.length > 0 && (
+        hasVisibleModels && (
           <div className="absolute bottom-4 left-4 z-20 pointer-events-none">
             <div className="bg-asphalt-900/95 backdrop-blur border border-pavasal-500/50 px-3.5 py-2 rounded-lg text-xs text-asphalt-100 shadow-xl flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-pavasal-500 animate-pulse shrink-0" />
@@ -1086,7 +1103,7 @@ export const ViewerCanvas: React.FC = () => {
 
       {/* Active Area / Volume Measure Prompt Hint when empty */}
       {isEngineReady &&
-        loadedModels.length > 0 &&
+        hasVisibleModels &&
         activeTool === 'measure' &&
         ((measureMode === 'area' && areaItems.length === 0) ||
           (measureMode === 'volume' && volumeItems.length === 0)) && (
@@ -1104,7 +1121,7 @@ export const ViewerCanvas: React.FC = () => {
 
       {/* Active Measurements Quick Actions */}
       {isEngineReady &&
-        loadedModels.length > 0 &&
+        hasVisibleModels &&
         activeTool !== 'coordinates' &&
         (measurementCount > 0 || areaItems.length > 0 || volumeItems.length > 0) && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20">
