@@ -2,6 +2,13 @@ import React from 'react';
 import { useViewerStore } from '../../store/useViewerStore';
 import { useEngine } from '../../viewer/EngineContext';
 
+const VARIOS_FLAG = '__pavabimVarios';
+
+const isVariosValue = (val: unknown): boolean => {
+  if (!val || typeof val !== 'object') return false;
+  return Boolean((val as Record<string, unknown>)[VARIOS_FLAG]);
+};
+
 const formatValue = (val: unknown): string => {
   if (val === null || val === undefined) return '—';
   if (typeof val === 'object' && 'value' in (val as Record<string, unknown>)) {
@@ -9,6 +16,17 @@ const formatValue = (val: unknown): string => {
     return inner !== null && inner !== undefined ? String(inner) : '—';
   }
   return String(val);
+};
+
+const renderPropertyValue = (val: unknown): React.ReactNode => {
+  if (isVariosValue(val)) {
+    return (
+      <span className="italic font-normal text-asphalt-300">
+        &lt;varios&gt;
+      </span>
+    );
+  }
+  return formatValue(val);
 };
 
 export const PropertiesInspector: React.FC = () => {
@@ -19,7 +37,7 @@ export const PropertiesInspector: React.FC = () => {
     selectedElementProperties,
     selectedElementsMap,
   } = useViewerStore();
-  const { clearSelection, focusElement } = useEngine();
+  const { clearSelection, focusElement, focusSelectionMap } = useEngine();
 
   if (!selectedElementId) {
     return (
@@ -45,6 +63,11 @@ export const PropertiesInspector: React.FC = () => {
       count: ids.length,
     }));
 
+  const allSelectedIds = Object.values(selectedElementsMap).flat();
+  const totalSelectedCount = allSelectedIds.length;
+  const isMultiSelection = totalSelectedCount > 1;
+  const hasSingleCommonLocalId = new Set(allSelectedIds).size <= 1;
+
   const entries = selectedElementProperties
     ? Object.entries(selectedElementProperties)
     : [];
@@ -57,16 +80,27 @@ export const PropertiesInspector: React.FC = () => {
       <div className="bg-asphalt-800/80 border border-asphalt-700 border-l-2 border-l-pavasal-500 rounded-md p-3">
         <div className="flex items-center justify-between">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-pavasal-400">
-            Elemento seleccionado
+            {isMultiSelection
+              ? `Elementos seleccionados (${totalSelectedCount})`
+              : 'Elemento seleccionado'}
           </span>
           <div className="flex items-center space-x-2">
             {selectedModelId && (
               <button
                 onClick={() =>
-                  focusElement(selectedModelId, Number(selectedElementId))
+                  isMultiSelection
+                    ? void focusSelectionMap(selectedElementsMap, true)
+                    : void focusElement(
+                        selectedModelId,
+                        Number(selectedElementId),
+                      )
                 }
                 className="text-[11px] text-pavasal-400 hover:text-pavasal-300 font-medium transition-colors"
-                title="Enfocar cámara en el elemento"
+                title={
+                  isMultiSelection
+                    ? 'Enfocar cámara en los elementos seleccionados'
+                    : 'Enfocar cámara en el elemento'
+                }
               >
                 Enfocar
               </button>
@@ -81,21 +115,38 @@ export const PropertiesInspector: React.FC = () => {
           </div>
         </div>
         <div className="mt-2 font-mono text-sm text-white">
-          Local ID: #{selectedElementId}
+          Local ID:{' '}
+          {hasSingleCommonLocalId ? (
+            `#${selectedElementId}`
+          ) : (
+            <span className="italic font-sans font-normal text-asphalt-300">
+              &lt;varios&gt;
+            </span>
+          )}
         </div>
         {selectedModelId && selectedModelName && (
           <div
             className="mt-1.5 flex items-center gap-1.5 text-[11px] min-w-0"
             title={
-              selectedModelName !== selectedModelId
-                ? `${selectedModelName} (${selectedModelId})`
-                : selectedModelId
+              selectedModelNames.length > 1
+                ? selectedModelNames
+                    .map((entry) => `${entry.name} (${entry.count})`)
+                    .join(', ')
+                : selectedModelName !== selectedModelId
+                  ? `${selectedModelName} (${selectedModelId})`
+                  : selectedModelId
             }
           >
             <span className="text-asphalt-400 shrink-0">Modelo:</span>
-            <span className="font-medium text-asphalt-100 truncate">
-              {selectedModelName}
-            </span>
+            {selectedModelNames.length > 1 ? (
+              <span className="italic font-normal text-asphalt-300 truncate">
+                &lt;varios&gt;
+              </span>
+            ) : (
+              <span className="font-medium text-asphalt-100 truncate">
+                {selectedModelName}
+              </span>
+            )}
           </div>
         )}
         {selectedModelNames.length > 1 && (
@@ -129,7 +180,7 @@ export const PropertiesInspector: React.FC = () => {
                   {key}
                 </span>
                 <span className="text-asphalt-100 font-medium text-right break-all">
-                  {formatValue(val)}
+                  {renderPropertyValue(val)}
                 </span>
               </div>
             ))}
@@ -163,7 +214,7 @@ export const PropertiesInspector: React.FC = () => {
                       >
                         <span className="text-asphalt-400 truncate">{k}</span>
                         <span className="text-asphalt-100 text-right break-all">
-                          {formatValue(v)}
+                          {renderPropertyValue(v)}
                         </span>
                       </div>
                     ))}
