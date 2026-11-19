@@ -80,6 +80,9 @@ export const ViewerCanvas: React.FC = () => {
   activeToolRef.current = activeTool;
   const measureModeRef = useRef(measureMode);
   measureModeRef.current = measureMode;
+  const isCoordinatesActive =
+    activeTool === 'coordinates' ||
+    (activeTool === 'measure' && measureMode === 'coordinates');
   const { loadLocalFragFiles } = useLocalFragUpload();
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [faceContextMenu, setFaceContextMenu] =
@@ -193,7 +196,7 @@ export const ViewerCanvas: React.FC = () => {
           setAnchorMeasureTarget(null);
           return;
         }
-        if (activeTool === 'coordinates' || pickedCoordinate) {
+        if (isCoordinatesActive || pickedCoordinate) {
           setHoverCoordinate(null);
           setPickedCoordinate(null);
         }
@@ -279,7 +282,7 @@ export const ViewerCanvas: React.FC = () => {
   }, [viewerToastError, setViewerToastError]);
 
   useEffect(() => {
-    if (activeTool !== 'coordinates') {
+    if (!isCoordinatesActive) {
       coordPickReqIdRef.current++;
       setHoverCoordinate(null);
       setHoverScreenPos(null);
@@ -301,10 +304,10 @@ export const ViewerCanvas: React.FC = () => {
     if (activeTool !== 'measure') {
       measurePickReqIdRef.current++;
     }
-    if (activeTool !== 'coordinates' && activeTool !== 'measure') {
+    if (!isCoordinatesActive && activeTool !== 'measure') {
       leftPointerDownRef.current = null;
     }
-  }, [activeTool, measureMode]);
+  }, [activeTool, measureMode, isCoordinatesActive]);
 
   useEffect(() => {
     if (!isEngineReady) return;
@@ -456,7 +459,7 @@ export const ViewerCanvas: React.FC = () => {
       rightPointerDownRef.current = null;
     }
 
-    if (e.button === 0 && (activeTool === 'coordinates' || activeTool === 'measure')) {
+    if (e.button === 0 && (isCoordinatesActive || activeTool === 'measure')) {
       leftPointerDownRef.current = { x: e.clientX, y: e.clientY };
     } else {
       leftPointerDownRef.current = null;
@@ -465,7 +468,7 @@ export const ViewerCanvas: React.FC = () => {
 
   const handleViewportPointerMove = async (e: React.PointerEvent<HTMLDivElement>) => {
     if (
-      (activeTool !== 'coordinates' && activeTool !== 'measure') ||
+      (!isCoordinatesActive && activeTool !== 'measure') ||
       !isEngineReady ||
       e.buttons !== 0
     ) {
@@ -479,9 +482,12 @@ export const ViewerCanvas: React.FC = () => {
     hoverPickInFlightRef.current = true;
 
     try {
-      if (activeTool === 'coordinates') {
+      if (isCoordinatesActive) {
         const hit = await pickCoordinateAtClientPoint(e.clientX, e.clientY);
-        if (activeToolRef.current !== 'coordinates') return;
+        const currentCoordActive =
+          activeToolRef.current === 'coordinates' ||
+          (activeToolRef.current === 'measure' && measureModeRef.current === 'coordinates');
+        if (!currentCoordActive) return;
         setHoverCoordinate(hit);
       } else if (measureModeRef.current === 'area') {
         const face = await pickAreaFaceAtClientPoint(e.clientX, e.clientY);
@@ -529,7 +535,7 @@ export const ViewerCanvas: React.FC = () => {
   const handleViewportPointerUp = async (e: React.PointerEvent<HTMLDivElement>) => {
     if (
       e.button !== 0 ||
-      (activeTool !== 'coordinates' && activeTool !== 'measure') ||
+      (!isCoordinatesActive && activeTool !== 'measure') ||
       !isEngineReady
     ) {
       return;
@@ -541,10 +547,13 @@ export const ViewerCanvas: React.FC = () => {
       return;
     }
 
-    if (activeTool === 'coordinates') {
+    if (isCoordinatesActive) {
       const reqId = ++coordPickReqIdRef.current;
       const hit = await pickCoordinateAtClientPoint(e.clientX, e.clientY);
-      if (reqId !== coordPickReqIdRef.current || activeToolRef.current !== 'coordinates') {
+      const currentCoordActive =
+        activeToolRef.current === 'coordinates' ||
+        (activeToolRef.current === 'measure' && measureModeRef.current === 'coordinates');
+      if (reqId !== coordPickReqIdRef.current || !currentCoordActive) {
         return;
       }
 
@@ -728,7 +737,7 @@ export const ViewerCanvas: React.FC = () => {
         }}
         onContextMenu={(e) => void handleViewportContextMenu(e)}
         className={`w-full h-full bg-asphalt-950 ${
-          activeTool === 'coordinates' || activeTool === 'measure'
+          isCoordinatesActive || activeTool === 'measure'
             ? 'cursor-crosshair'
             : ''
         }`}
@@ -775,7 +784,7 @@ export const ViewerCanvas: React.FC = () => {
         )}
 
       {/* Coordinate Hover Vertex Snap Preview */}
-      {activeTool === 'coordinates' && hoverCoordinate && hoverScreenPos && (
+      {isCoordinatesActive && hoverCoordinate && hoverScreenPos && (
         <div
           style={{
             left: hoverScreenPos.x,
@@ -1072,7 +1081,7 @@ export const ViewerCanvas: React.FC = () => {
 
           <div className="flex items-center justify-between gap-2 pt-1">
             <span className="text-[11px] text-asphalt-400 truncate">
-              {activeTool === 'coordinates'
+              {isCoordinatesActive
                 ? 'Haz clic en otro vértice para actualizar'
                 : 'Reactiva Coordenadas para medir otro'}
             </span>
@@ -1087,7 +1096,7 @@ export const ViewerCanvas: React.FC = () => {
         </div>
       ) : (
         isEngineReady &&
-        activeTool === 'coordinates' &&
+        isCoordinatesActive &&
         hasVisibleModels && (
           <div className="absolute bottom-4 left-4 z-20 pointer-events-none">
             <div className="bg-asphalt-900/95 backdrop-blur border border-pavasal-500/50 px-3.5 py-2 rounded-lg text-xs text-asphalt-100 shadow-xl flex items-center gap-2">

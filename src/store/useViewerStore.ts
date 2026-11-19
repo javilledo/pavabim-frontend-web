@@ -9,7 +9,7 @@ export type ActiveTool =
   | 'measure'
   | 'section'
   | 'coordinates';
-export type MeasureMode = 'length' | 'area' | 'volume';
+export type MeasureMode = 'length' | 'area' | 'volume' | 'coordinates';
 export type CameraProjectionMode = 'Perspective' | 'Orthographic';
 
 export interface LoadedModel {
