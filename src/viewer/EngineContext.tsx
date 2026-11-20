@@ -535,6 +535,101 @@ function applyOrbitAnchor(controls: CameraControls, point: THREE.Vector3): void 
   controls.update(0);
 }
 
+const ORBIT_MARKER_PIXEL_SIZE = 14;
+
+function createOrbitCenterMarker(): { sprite: THREE.Sprite; dispose: () => void } {
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  if (ctx) {
+    const center = size * 0.5;
+    const radius = 23;
+
+    // Soft outer shadow halo for contrast against light surfaces
+    const halo = ctx.createRadialGradient(center, center, radius * 0.75, center, center, 31);
+    halo.addColorStop(0, 'rgba(15, 23, 42, 0.55)');
+    halo.addColorStop(1, 'rgba(15, 23, 42, 0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(center, center, 31, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 3D yellow spherical shading
+    const sphereGrad = ctx.createRadialGradient(
+      center - radius * 0.34,
+      center - radius * 0.36,
+      radius * 0.08,
+      center,
+      center,
+      radius
+    );
+    sphereGrad.addColorStop(0, '#fef9c3');
+    sphereGrad.addColorStop(0.35, '#facc15');
+    sphereGrad.addColorStop(0.82, '#eab308');
+    sphereGrad.addColorStop(1, '#a16207');
+
+    ctx.fillStyle = sphereGrad;
+    ctx.beginPath();
+    ctx.arc(center, center, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Subtle crisp outline so it stands out even over yellow highlights
+    ctx.strokeStyle = 'rgba(24, 24, 27, 0.85)';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(center, center, radius - 0.5, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    depthTest: false,
+    depthWrite: false,
+    transparent: true,
+  });
+
+  const sprite = new THREE.Sprite(material);
+  sprite.name = 'pavabim-orbit-center-marker';
+  sprite.visible = false;
+  sprite.frustumCulled = false;
+  sprite.renderOrder = 60;
+
+  return {
+    sprite,
+    dispose: () => {
+      sprite.removeFromParent();
+      material.dispose();
+      texture.dispose();
+    },
+  };
+}
+
+function updateOrbitMarkerScale(
+  marker: THREE.Object3D,
+  camera: THREE.Camera,
+  domElement: HTMLElement
+): void {
+  const viewportHeight = Math.max(1, domElement.clientHeight);
+  let worldHeight = 1;
+  if (camera instanceof THREE.OrthographicCamera) {
+    worldHeight = Math.abs(camera.top - camera.bottom) / Math.max(1e-6, camera.zoom);
+  } else if (camera instanceof THREE.PerspectiveCamera) {
+    const distance = Math.max(0.01, camera.position.distanceTo(marker.position));
+    worldHeight =
+      (2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5))) /
+      Math.max(1e-6, camera.zoom);
+  }
+  const worldSize = worldHeight * (ORBIT_MARKER_PIXEL_SIZE / viewportHeight);
+  marker.scale.set(worldSize, worldSize, 1);
+}
+
 function resolvePlaneOrbitAnchor(
   world: OBC.SimpleWorld<OBC.SimpleScene, OBC.OrthoPerspectiveCamera, OBC.SimpleRenderer>,
   fragments: OBC.FragmentsManager,
@@ -999,6 +1094,24 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
         // Capture-phase left-button orbit anchoring & cursor wheel zoom BEFORE camera-controls handles input
         const domElement = world.renderer.three.domElement;
+        const orbitCenterMarker = createOrbitCenterMarker();
+        world.scene.three.add(orbitCenterMarker.sprite);
+        const currentOrbitAnchor = new THREE.Vector3(0, 0, 0);
+        let activeOrbitDragCleanup: (() => void) | null = null;
+
+        const syncOrbitMarkerScale = () => {
+          if (!orbitCenterMarker.sprite.visible) return;
+          updateOrbitMarkerScale(orbitCenterMarker.sprite, world.camera.three, domElement);
+        };
+        world.camera.controls.addEventListener('update', syncOrbitMarkerScale);
+
+        const setOrbitAnchorPoint = (controls: CameraControls, point: THREE.Vector3) => {
+          applyOrbitAnchor(controls, point);
+          currentOrbitAnchor.copy(point);
+          orbitCenterMarker.sprite.position.copy(point);
+          updateOrbitMarkerScale(orbitCenterMarker.sprite, world.camera.three, domElement);
+        };
+
         const handleOrbitAnchorPointerDown = (event: PointerEvent) => {
           if (event.button !== 0 || activeToolRef.current === 'pan') return;
           if (clipperRef.current) {
@@ -1016,45 +1129,97 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           const bounds = domElement.getBoundingClientRect();
           if (bounds.width <= 0 || bounds.height <= 0) return;
 
+          activeOrbitDragCleanup?.();
+
+          // Default to current camera-controls pivot in case no surface/plane intersection exists
+          const currCenter = controls.getPosition(new THREE.Vector3(), false);
+          const currTarget = controls.getTarget(new THREE.Vector3(), false);
+          const currFocal = controls.getFocalOffset(new THREE.Vector3(), false);
+          const fallbackPivot = currTarget
+            .clone()
+            .add(
+              computeWorldFocalOffset(
+                currCenter,
+                currTarget,
+                currFocal,
+                currentWorld.camera.three.up
+              )
+            );
+          currentOrbitAnchor.copy(fallbackPivot);
+          orbitCenterMarker.sprite.position.copy(fallbackPivot);
+
           const ndc = new THREE.Vector2(
             ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
             -((event.clientY - bounds.top) / bounds.height) * 2 + 1
           );
 
           const requestId = ++anchorRequestIdRef.current;
+          const startX = event.clientX;
+          const startY = event.clientY;
+          let dragStarted = false;
+
+          const cleanupOrbitDragListeners = () => {
+            window.removeEventListener('pointermove', onMoveCheck, { capture: true });
+            window.removeEventListener('pointerup', onUpCheck, { capture: true });
+            window.removeEventListener('pointercancel', onUpCheck, { capture: true });
+            window.removeEventListener('blur', onUpCheck);
+            if (activeOrbitDragCleanup === cleanupOrbitDragListeners) {
+              activeOrbitDragCleanup = null;
+            }
+          };
+
+          const onMoveCheck = (moveEvt: PointerEvent) => {
+            if (
+              !currentWorld.camera.hasCameraControls() ||
+              !currentWorld.camera.controls.enabled ||
+              activeToolRef.current === 'pan'
+            ) {
+              orbitCenterMarker.sprite.visible = false;
+              dragStarted = true;
+              cleanupOrbitDragListeners();
+              return;
+            }
+            if (Math.hypot(moveEvt.clientX - startX, moveEvt.clientY - startY) > 2) {
+              dragStarted = true;
+              if (!orbitCenterMarker.sprite.visible) {
+                orbitCenterMarker.sprite.position.copy(currentOrbitAnchor);
+                updateOrbitMarkerScale(
+                  orbitCenterMarker.sprite,
+                  currentWorld.camera.three,
+                  domElement
+                );
+                orbitCenterMarker.sprite.visible = true;
+                currentWorld.renderer?.update();
+              }
+            }
+          };
+
+          const onUpCheck = () => {
+            dragStarted = true;
+            if (orbitCenterMarker.sprite.visible) {
+              orbitCenterMarker.sprite.visible = false;
+              currentWorld.renderer?.update();
+            }
+            cleanupOrbitDragListeners();
+          };
+
+          activeOrbitDragCleanup = cleanupOrbitDragListeners;
+          window.addEventListener('pointermove', onMoveCheck, { capture: true });
+          window.addEventListener('pointerup', onUpCheck, { capture: true });
+          window.addEventListener('pointercancel', onUpCheck, { capture: true });
+          window.addEventListener('blur', onUpCheck);
+
           const syncPoint = resolveSyncSurfacePoint(components, currentWorld, ndc);
           if (syncPoint) {
-            applyOrbitAnchor(controls, syncPoint);
+            setOrbitAnchorPoint(controls, syncPoint);
             return;
           }
 
           // Pivot immediately along the pointer ray even over empty space / edges so orbit never uses a stale distant point.
           const planePoint = resolvePlaneOrbitAnchor(currentWorld, fragments, ndc);
           if (planePoint) {
-            applyOrbitAnchor(controls, planePoint);
+            setOrbitAnchorPoint(controls, planePoint);
           }
-
-          const startX = event.clientX;
-          const startY = event.clientY;
-          let dragStarted = false;
-          const onMoveCheck = (moveEvt: PointerEvent) => {
-            if (Math.hypot(moveEvt.clientX - startX, moveEvt.clientY - startY) > 3) {
-              dragStarted = true;
-              cleanupAsyncGuard();
-            }
-          };
-          const onUpCheck = () => {
-            dragStarted = true;
-            cleanupAsyncGuard();
-          };
-          const cleanupAsyncGuard = () => {
-            window.removeEventListener('pointermove', onMoveCheck, { capture: true });
-            window.removeEventListener('pointerup', onUpCheck, { capture: true });
-            window.removeEventListener('pointercancel', onUpCheck, { capture: true });
-          };
-          window.addEventListener('pointermove', onMoveCheck, { capture: true });
-          window.addEventListener('pointerup', onUpCheck, { capture: true });
-          window.addEventListener('pointercancel', onUpCheck, { capture: true });
 
           const clientPos = new THREE.Vector2(startX, startY);
           void resolveAsyncSurfacePoint(
@@ -1065,7 +1230,6 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             clientPos,
             domElement
           ).then((asyncPoint) => {
-            cleanupAsyncGuard();
             if (
               !asyncPoint ||
               dragStarted ||
@@ -1077,7 +1241,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             ) {
               return;
             }
-            applyOrbitAnchor(currentWorld.camera.controls, asyncPoint);
+            setOrbitAnchorPoint(currentWorld.camera.controls, asyncPoint);
           });
         };
 
@@ -1106,6 +1270,9 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           passive: false,
         });
         pointerOrbitCleanupRef.current = () => {
+          activeOrbitDragCleanup?.();
+          world.camera.controls.removeEventListener('update', syncOrbitMarkerScale);
+          orbitCenterMarker.dispose();
           domElement.removeEventListener('pointerdown', handleOrbitAnchorPointerDown, {
             capture: true,
           });
