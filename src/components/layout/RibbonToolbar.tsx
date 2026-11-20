@@ -64,7 +64,6 @@ export const RibbonToolbar: React.FC = () => {
 
   const {
     isEngineReady,
-    setPlanView,
     toggleGridVisibility,
     toggleSectionGizmosVisibility,
     clearSections,
@@ -424,33 +423,6 @@ export const RibbonToolbar: React.FC = () => {
 
           <div className="h-4 w-px bg-asphalt-700 mx-1 shrink-0" />
 
-          <button
-            type="button"
-            onClick={() => void setPlanView()}
-            disabled={!isEngineReady}
-            className="px-2.5 py-1.5 rounded text-xs font-medium text-asphalt-200 hover:bg-asphalt-800 hover:text-white disabled:opacity-40 transition-colors flex items-center gap-1 whitespace-nowrap shrink-0"
-            title="Vista en planta (desde arriba)"
-          >
-            <svg
-              className="w-3.5 h-3.5 shrink-0"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M8 1.8v6.2" />
-              <path d="M5.7 5.8L8 8.2l2.3-2.4" />
-              <path
-                d="M4.3 9.8h9.5l-2.1 3.8H2.2l2.1-3.8Z"
-                fill="currentColor"
-                fillOpacity="0.16"
-              />
-            </svg>
-            Planta
-          </button>
           <button
             type="button"
             onClick={() => toggleGridVisibility()}

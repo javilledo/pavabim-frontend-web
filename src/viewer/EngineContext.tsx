@@ -87,6 +87,8 @@ export interface EngineContextValue {
   removeModel: (modelId: string) => Promise<void>;
   fitCameraToModels: () => Promise<void>;
   setPlanView: () => Promise<void>;
+  setPlanViewOrientation: (cardinal: 'N' | 'S' | 'E' | 'O') => Promise<void>;
+  setCameraViewFromDirection: (dirX: number, dirY: number, dirZ: number) => Promise<void>;
   focusElement: (modelId: string, localId: number) => Promise<void>;
   focusElements: (modelId: string, localIds: number[], zoomToSelection?: boolean) => Promise<void>;
   focusSelectionMap: (selectionByModel: Record<string, number[]>, zoomToSelection?: boolean) => Promise<void>;
@@ -1825,6 +1827,75 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setStoreSectionGizmosVisible,
   ]);
 
+  const fitBoxAtAngles = useCallback(
+    async (
+      controls: CameraControls,
+      camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
+      targetBox: THREE.Box3 | null,
+      shortestTheta: number,
+      targetPhi: number
+    ) => {
+      if (targetBox && !targetBox.isEmpty()) {
+        const size = targetBox.getSize(new THREE.Vector3());
+        const center = targetBox.getCenter(new THREE.Vector3());
+
+        // Project AABB extents into the target view basis so diagonal edges/corners fit without rounding to 90 deg
+        const normal = new THREE.Vector3()
+          .setFromSphericalCoords(1, targetPhi, shortestTheta)
+          .normalize();
+        const right = new THREE.Vector3(
+          Math.cos(shortestTheta),
+          0,
+          -Math.sin(shortestTheta)
+        ).normalize();
+        const viewUp = new THREE.Vector3().crossVectors(normal, right).normalize();
+
+        const halfSize = size.clone().multiplyScalar(0.5);
+        const spanX =
+          (Math.abs(right.x) * halfSize.x +
+            Math.abs(right.y) * halfSize.y +
+            Math.abs(right.z) * halfSize.z) *
+            2 +
+          4;
+        const spanY =
+          (Math.abs(viewUp.x) * halfSize.x +
+            Math.abs(viewUp.y) * halfSize.y +
+            Math.abs(viewUp.z) * halfSize.z) *
+            2 +
+          4;
+        const spanZ =
+          (Math.abs(normal.x) * halfSize.x +
+            Math.abs(normal.y) * halfSize.y +
+            Math.abs(normal.z) * halfSize.z) *
+            2;
+
+        if (camera instanceof THREE.OrthographicCamera) {
+          const minClearance = Math.max(size.x, size.y, size.z) * 1.5 + 10;
+          if (controls.distance < minClearance) {
+            void controls.dollyTo(minClearance, false);
+          }
+          const orthoWidth = Math.max(1e-6, camera.right - camera.left);
+          const orthoHeight = Math.max(1e-6, camera.top - camera.bottom);
+          const targetZoom = Math.min(orthoWidth / spanX, orthoHeight / spanY);
+          void controls.zoomTo(targetZoom, true);
+        } else {
+          const fitDistance = controls.getDistanceToFitBox(spanX, spanY, spanZ);
+          void controls.dollyTo(Math.max(0.25, fitDistance), true);
+        }
+
+        void controls.setFocalOffset(0, 0, 0, true);
+        void controls.moveTo(center.x, center.y, center.z, true);
+        await controls.rotateTo(shortestTheta, targetPhi, true);
+      } else {
+        void controls.setFocalOffset(0, 0, 0, true);
+        void controls.moveTo(0, 0, 0, true);
+        void controls.dollyTo(20, true);
+        await controls.rotateTo(shortestTheta, targetPhi, true);
+      }
+    },
+    []
+  );
+
   const loadModelFromBuffer = useCallback(
     async (
       buffer: ArrayBuffer | Uint8Array,
@@ -1866,6 +1937,13 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           });
         }
 
+        const hadVisibleModels = Array.from(fragments.list.entries()).some(
+          ([id, existingModel]) =>
+            id !== modelId &&
+            existingModel.object.visible &&
+            existingModel.object.parent === world.scene.three
+        );
+
         const currentActiveProjectId =
           useViewerStore.getState().currentProjectId;
         const belongsToActiveProject =
@@ -1901,7 +1979,8 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
                 : new THREE.Box3().setFromObject(model.object);
 
             if (!box.isEmpty()) {
-              const size = box.getSize(new THREE.Vector3());
+              const boundsForFar = getVisibleModelsBounds(fragments) ?? box;
+              const size = boundsForFar.getSize(new THREE.Vector3());
               const maxExtent = Math.max(size.x, size.y, size.z);
               if (Number.isFinite(maxExtent) && maxExtent > 0) {
                 const dynamicFar = Math.max(2500, maxExtent * 10);
@@ -1911,13 +1990,26 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
                 world.camera.threeOrtho.updateProjectionMatrix();
               }
 
-              if (!options?.skipCameraFit) {
-                await world.camera.controls.fitToBox(box, true, {
-                  paddingLeft: 2,
-                  paddingRight: 2,
-                  paddingBottom: 2,
-                  paddingTop: 2,
-                });
+              // Keep user's current view untouched when models are already visible;
+              // on the first visible model, frame it while preserving current camera angles.
+              if (
+                !options?.skipCameraFit &&
+                initialVisible &&
+                !hadVisibleModels
+              ) {
+                const currentAzimuth = world.camera.controls.azimuthAngle;
+                const currentPolar = THREE.MathUtils.clamp(
+                  world.camera.controls.polarAngle,
+                  1e-4,
+                  Math.PI - 1e-4
+                );
+                await fitBoxAtAngles(
+                  world.camera.controls,
+                  world.camera.three,
+                  box,
+                  currentAzimuth,
+                  currentPolar
+                );
                 await fragments.core.update(true);
               }
             }
@@ -1931,7 +2023,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setModelLoading(false, null);
       }
     },
-    [addLoadedModel, setModelLoading]
+    [addLoadedModel, fitBoxAtAngles, setModelLoading]
   );
 
   const toggleModelVisibility = useCallback(
@@ -1973,21 +2065,30 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const fitCameraToModels = useCallback(async () => {
     const world = worldRef.current;
+    const fragments = fragmentsRef.current;
     if (!world) return;
 
     orthoZoomTargetRef.current = null;
-    const combinedBox = getVisibleModelsBounds(fragmentsRef.current);
+    const combinedBox = getVisibleModelsBounds(fragments);
     if (combinedBox) {
-      await world.camera.controls.fitToBox(combinedBox, true, {
-        paddingLeft: 2,
-        paddingRight: 2,
-        paddingBottom: 2,
-        paddingTop: 2,
-      });
+      await fitBoxAtAngles(
+        world.camera.controls,
+        world.camera.three,
+        combinedBox,
+        world.camera.controls.azimuthAngle,
+        THREE.MathUtils.clamp(
+          world.camera.controls.polarAngle,
+          1e-4,
+          Math.PI - 1e-4
+        )
+      );
+      if (fragments?.initialized) {
+        await fragments.core.update(true);
+      }
     } else {
       await world.camera.controls.setLookAt(15, 12, 15, 0, 0, 0, true);
     }
-  }, []);
+  }, [fitBoxAtAngles]);
 
   const setPlanView = useCallback(async () => {
     const world = worldRef.current;
@@ -2024,6 +2125,106 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       await fragments.core.update(true);
     }
   }, []);
+
+  const orientCameraToAngles = useCallback(
+    async (
+      controls: CameraControls,
+      camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
+      fragments: OBC.FragmentsManager | null,
+      shortestTheta: number,
+      targetPhi: number
+    ) => {
+      const combinedBox = getVisibleModelsBounds(fragments);
+      await fitBoxAtAngles(
+        controls,
+        camera,
+        combinedBox,
+        shortestTheta,
+        targetPhi
+      );
+
+      if (fragments?.initialized) {
+        await fragments.core.update(true);
+      }
+    },
+    [fitBoxAtAngles]
+  );
+
+  const setPlanViewOrientation = useCallback(
+    async (cardinal: 'N' | 'S' | 'E' | 'O') => {
+      const world = worldRef.current;
+      const fragments = fragmentsRef.current;
+      if (!world) return;
+
+      orthoZoomTargetRef.current = null;
+      const controls = world.camera.controls;
+      const rawTheta =
+        cardinal === 'N'
+          ? 0
+          : cardinal === 'S'
+            ? Math.PI
+            : cardinal === 'E'
+              ? -Math.PI / 2
+              : Math.PI / 2;
+      const currentTheta = controls.azimuthAngle;
+      const shortestTheta =
+        currentTheta +
+        (THREE.MathUtils.euclideanModulo(
+          rawTheta - currentTheta + Math.PI,
+          Math.PI * 2
+        ) -
+          Math.PI);
+
+      await orientCameraToAngles(
+        controls,
+        world.camera.three,
+        fragments,
+        shortestTheta,
+        1e-4
+      );
+    },
+    [orientCameraToAngles]
+  );
+
+  const setCameraViewFromDirection = useCallback(
+    async (dirX: number, dirY: number, dirZ: number) => {
+      const world = worldRef.current;
+      const fragments = fragmentsRef.current;
+      if (!world) return;
+
+      const dir = new THREE.Vector3(dirX, dirY, dirZ);
+      if (dir.lengthSq() < 1e-8) return;
+      dir.normalize();
+
+      orthoZoomTargetRef.current = null;
+      const controls = world.camera.controls;
+
+      const targetPhi = THREE.MathUtils.clamp(
+        Math.acos(THREE.MathUtils.clamp(dir.y, -1, 1)),
+        1e-4,
+        Math.PI - 1e-4
+      );
+      const isPurePolar = Math.hypot(dir.x, dir.z) < 1e-5;
+      const rawTheta = isPurePolar ? 0 : Math.atan2(dir.x, dir.z);
+      const currentTheta = controls.azimuthAngle;
+      const shortestTheta =
+        currentTheta +
+        (THREE.MathUtils.euclideanModulo(
+          rawTheta - currentTheta + Math.PI,
+          Math.PI * 2
+        ) -
+          Math.PI);
+
+      await orientCameraToAngles(
+        controls,
+        world.camera.three,
+        fragments,
+        shortestTheta,
+        targetPhi
+      );
+    },
+    [orientCameraToAngles]
+  );
 
   const focusSelectionMap = useCallback(
     async (selectionByModel: Record<string, number[]>, zoomToSelection = false) => {
@@ -3582,12 +3783,17 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             world.camera.threeOrtho.far = dynamicFar;
             world.camera.threeOrtho.updateProjectionMatrix();
           }
-          await world.camera.controls.fitToBox(combinedBox, true, {
-            paddingLeft: 2,
-            paddingRight: 2,
-            paddingBottom: 2,
-            paddingTop: 2,
-          });
+          await fitBoxAtAngles(
+            world.camera.controls,
+            world.camera.three,
+            combinedBox,
+            world.camera.controls.azimuthAngle,
+            THREE.MathUtils.clamp(
+              world.camera.controls.polarAngle,
+              1e-4,
+              Math.PI - 1e-4
+            )
+          );
           await fragments.core.update(true);
         } else {
           await world.camera.controls.setLookAt(15, 12, 15, 0, 0, 0, true);
@@ -3606,6 +3812,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   }, [
     clearMeasurements,
     currentProjectId,
+    fitBoxAtAngles,
     isEngineReady,
     setStoreSectionActive,
     setStoreSectionGizmosVisible,
@@ -4191,6 +4398,8 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         removeModel,
         fitCameraToModels,
         setPlanView,
+        setPlanViewOrientation,
+        setCameraViewFromDirection,
         focusElement,
         focusElements,
         focusSelectionMap,
