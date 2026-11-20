@@ -91,6 +91,14 @@ export interface EngineContextValue {
   focusElements: (modelId: string, localIds: number[], zoomToSelection?: boolean) => Promise<void>;
   focusSelectionMap: (selectionByModel: Record<string, number[]>, zoomToSelection?: boolean) => Promise<void>;
   toggleSelectionMap: (selectionByModel: Record<string, number[]>, zoomToSelection?: boolean) => Promise<void>;
+  selectElementsInScreenRect: (
+    startClientX: number,
+    startClientY: number,
+    endClientX: number,
+    endClientY: number,
+    fullyIncluded: boolean,
+    additive?: boolean
+  ) => Promise<void>;
   clearSelection: () => Promise<void>;
   hideSelectedElements: (keepSelection?: boolean) => Promise<void>;
   toggleHideSelectedElements: () => Promise<void>;
@@ -1114,6 +1122,12 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
         const handleOrbitAnchorPointerDown = (event: PointerEvent) => {
           if (event.button !== 0 || activeToolRef.current === 'pan') return;
+          if (
+            (event.ctrlKey || event.metaKey) &&
+            (activeToolRef.current === 'select' || activeToolRef.current === 'orbit')
+          ) {
+            return;
+          }
           if (clipperRef.current) {
             for (const [, plane] of clipperRef.current.list) {
               if (plane.controls.enabled && plane.controls.axis !== null) {
@@ -2087,6 +2101,101 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       await highlighter.highlightByID('select', nextMap, true, zoomToSelection);
     },
     [setSelectedElements]
+  );
+
+  const selectElementsInScreenRect = useCallback(
+    async (
+      startClientX: number,
+      startClientY: number,
+      endClientX: number,
+      endClientY: number,
+      fullyIncluded: boolean,
+      additive = true
+    ) => {
+      const fragments = fragmentsRef.current;
+      const world = worldRef.current;
+      const highlighter = highlighterRef.current;
+      const domElement = world?.renderer?.three.domElement;
+      if (
+        !fragments ||
+        !world ||
+        !highlighter ||
+        !domElement ||
+        !fragments.initialized
+      ) {
+        return;
+      }
+
+      const topLeft = new THREE.Vector2(
+        Math.min(startClientX, endClientX),
+        Math.min(startClientY, endClientY)
+      );
+      const bottomRight = new THREE.Vector2(
+        Math.max(startClientX, endClientX),
+        Math.max(startClientY, endClientY)
+      );
+      if (bottomRight.x - topLeft.x < 2 || bottomRight.y - topLeft.y < 2) {
+        return;
+      }
+
+      const nextMap: OBC.ModelIdMap = {};
+      if (additive) {
+        const current = useViewerStore.getState().selectedElementsMap;
+        for (const [modelId, localIds] of Object.entries(current)) {
+          if (localIds.length > 0) {
+            nextMap[modelId] = new Set(localIds);
+          }
+        }
+      }
+
+      const hiddenMap = useViewerStore.getState().hiddenElementsMap;
+      const camera = world.camera.three as
+        | THREE.PerspectiveCamera
+        | THREE.OrthographicCamera;
+
+      const visibleModels: Array<[string, FRAGS.FragmentsModel]> = [];
+      for (const [modelId, model] of fragments.list) {
+        if (model.object.visible) {
+          visibleModels.push([modelId, model]);
+        }
+      }
+      if (visibleModels.length === 0) return;
+
+      const results = await Promise.all(
+        visibleModels.map(async ([modelId, model]) => {
+          const res = await model
+            .rectangleRaycast({
+              camera,
+              dom: domElement,
+              topLeft,
+              bottomRight,
+              fullyIncluded,
+            })
+            .catch(() => null);
+          return { modelId, res };
+        })
+      );
+
+      for (const { modelId, res } of results) {
+        if (!res?.localIds?.length) continue;
+        const hiddenSet = new Set(hiddenMap[modelId] ?? []);
+        const targetSet = nextMap[modelId] ?? new Set<number>();
+        for (const localId of res.localIds) {
+          if (!hiddenSet.has(localId)) {
+            targetSet.add(localId);
+          }
+        }
+        if (targetSet.size > 0) {
+          nextMap[modelId] = targetSet;
+        }
+      }
+
+      if (Object.keys(nextMap).length > 0) {
+        await highlighter.highlightByID('select', nextMap, true, false);
+        void fragments.core.update(true);
+      }
+    },
+    []
   );
 
   const focusElements = useCallback(
@@ -4086,6 +4195,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         focusElements,
         focusSelectionMap,
         toggleSelectionMap,
+        selectElementsInScreenRect,
         clearSelection,
         hideSelectedElements,
         toggleHideSelectedElements,

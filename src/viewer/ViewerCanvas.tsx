@@ -25,6 +25,22 @@ interface ScreenPoint {
   y: number;
 }
 
+interface SelectionBoxState {
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+}
+
+interface BoxSelectSession {
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+  mode: 'right-start' | 'left-drag';
+  active: boolean;
+}
+
 const formatCoordinate = (value: number): string => formatCoordinateEs(value, 3);
 
 export const ViewerCanvas: React.FC = () => {
@@ -37,14 +53,18 @@ export const ViewerCanvas: React.FC = () => {
   const coordPickReqIdRef = useRef(0);
   const measurePickReqIdRef = useRef(0);
   const sectionPickReqIdRef = useRef(0);
+  const boxSelectRef = useRef<BoxSelectSession | null>(null);
+  const suppressContextMenuRef = useRef(false);
   const hoverPickInFlightRef = useRef(false);
   const lastHoverCheckTsRef = useRef(0);
   const {
     isEngineReady,
     world,
+    highlighter,
     initEngine,
     disposeEngine,
     clearSelection,
+    selectElementsInScreenRect,
     toggleHideSelectedElements,
     pickFaceAtClientPoint,
     pickCoordinateAtClientPoint,
@@ -112,6 +132,7 @@ export const ViewerCanvas: React.FC = () => {
   const [volumeItems, setVolumeItems] = useState<VolumeElementMeasurement[]>([]);
   const [hoverVolumeElement, setHoverVolumeElement] =
     useState<VolumeElementMeasurement | null>(null);
+  const [selectionBox, setSelectionBox] = useState<SelectionBoxState | null>(null);
   const prevHoverAreaKeyRef = useRef<string | null>(null);
   const prevHoverVolumeKeyRef = useRef<string | null>(null);
 
@@ -173,6 +194,18 @@ export const ViewerCanvas: React.FC = () => {
     };
   }, [initEngine, disposeEngine]);
 
+  const cancelBoxSelect = useCallback(() => {
+    if (!boxSelectRef.current) return;
+    boxSelectRef.current = null;
+    setSelectionBox(null);
+    if (world?.camera.hasCameraControls()) {
+      world.camera.controls.enabled = true;
+    }
+    if (highlighter) {
+      highlighter.config.selectEnabled = activeToolRef.current === 'select';
+    }
+  }, [highlighter, world]);
+
   // Keyboard shortcuts (Escape clears selection; Space hides selected elements)
   useEffect(() => {
     const isEditableTarget = (target: EventTarget | null): boolean => {
@@ -189,6 +222,10 @@ export const ViewerCanvas: React.FC = () => {
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (boxSelectRef.current) {
+          cancelBoxSelect();
+          return;
+        }
         if (faceContextMenu) {
           setFaceContextMenu(null);
           return;
@@ -245,6 +282,7 @@ export const ViewerCanvas: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     activeTool,
+    cancelBoxSelect,
     clearSelection,
     faceContextMenu,
     handleUndoMeasurement,
@@ -289,6 +327,88 @@ export const ViewerCanvas: React.FC = () => {
   }, [viewerToastError, setViewerToastError]);
 
   useEffect(() => {
+    if (!isEngineReady) return;
+
+    const handleWindowPointerMove = (e: PointerEvent) => {
+      const session = boxSelectRef.current;
+      if (!session) return;
+
+      session.currentX = e.clientX;
+      session.currentY = e.clientY;
+
+      if (session.mode === 'left-drag' && !session.active) {
+        if (Math.hypot(e.clientX - session.startX, e.clientY - session.startY) <= 4) {
+          return;
+        }
+        session.active = true;
+        if (highlighter) {
+          highlighter.config.selectEnabled = false;
+        }
+      }
+
+      if (session.active) {
+        setSelectionBox({
+          startX: session.startX,
+          startY: session.startY,
+          currentX: session.currentX,
+          currentY: session.currentY,
+        });
+      }
+    };
+
+    const handleWindowPointerUp = (e: PointerEvent) => {
+      const session = boxSelectRef.current;
+      if (!session || e.button !== 0) return;
+
+      const { startX, startY, currentX, currentY, active } = session;
+      boxSelectRef.current = null;
+      setSelectionBox(null);
+
+      if (world?.camera.hasCameraControls()) {
+        world.camera.controls.enabled = true;
+      }
+
+      if (active) {
+        const dx = currentX - startX;
+        const dy = currentY - startY;
+        const fullyIncluded = dx >= 0;
+        if (Math.abs(dx) >= 3 && Math.abs(dy) >= 3) {
+          void selectElementsInScreenRect(
+            startX,
+            startY,
+            currentX,
+            currentY,
+            fullyIncluded,
+            true
+          );
+        }
+        window.setTimeout(() => {
+          if (highlighter) {
+            highlighter.config.selectEnabled = activeToolRef.current === 'select';
+          }
+        }, 0);
+      } else if (highlighter) {
+        highlighter.config.selectEnabled = activeToolRef.current === 'select';
+      }
+    };
+
+    const handleWindowCancel = () => {
+      cancelBoxSelect();
+    };
+
+    window.addEventListener('pointermove', handleWindowPointerMove, { capture: true });
+    window.addEventListener('pointerup', handleWindowPointerUp, { capture: true });
+    window.addEventListener('pointercancel', handleWindowCancel);
+    window.addEventListener('blur', handleWindowCancel);
+    return () => {
+      window.removeEventListener('pointermove', handleWindowPointerMove, { capture: true });
+      window.removeEventListener('pointerup', handleWindowPointerUp, { capture: true });
+      window.removeEventListener('pointercancel', handleWindowCancel);
+      window.removeEventListener('blur', handleWindowCancel);
+    };
+  }, [cancelBoxSelect, highlighter, isEngineReady, selectElementsInScreenRect, world]);
+
+  useEffect(() => {
     if (!isCoordinatesActive) {
       coordPickReqIdRef.current++;
       setHoverCoordinate(null);
@@ -314,10 +434,13 @@ export const ViewerCanvas: React.FC = () => {
     if (activeTool !== 'section') {
       sectionPickReqIdRef.current++;
     }
+    if (activeTool !== 'select' && activeTool !== 'orbit') {
+      cancelBoxSelect();
+    }
     if (!isCoordinatesActive && activeTool !== 'measure' && activeTool !== 'section') {
       leftPointerDownRef.current = null;
     }
-  }, [activeTool, measureMode, isCoordinatesActive]);
+  }, [activeTool, measureMode, isCoordinatesActive, cancelBoxSelect]);
 
   useEffect(() => {
     if (!isEngineReady) return;
@@ -476,7 +599,79 @@ export const ViewerCanvas: React.FC = () => {
   }, [clipper]);
 
   const handleViewportPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const canBoxSelect =
+      isEngineReady &&
+      (activeToolRef.current === 'select' || activeToolRef.current === 'orbit');
+    const isCtrl = e.ctrlKey || e.metaKey;
+
+    if (boxSelectRef.current) {
+      boxSelectRef.current.currentX = e.clientX;
+      boxSelectRef.current.currentY = e.clientY;
+      if (boxSelectRef.current.active) {
+        setSelectionBox({
+          startX: boxSelectRef.current.startX,
+          startY: boxSelectRef.current.startY,
+          currentX: e.clientX,
+          currentY: e.clientY,
+        });
+      }
+      if (world?.camera.hasCameraControls()) {
+        world.camera.controls.enabled = false;
+      }
+      if (highlighter) {
+        highlighter.config.selectEnabled = false;
+      }
+      rightPointerDownRef.current = null;
+      leftPointerDownRef.current = null;
+      return;
+    }
+
+    if (e.button === 2 && isCtrl && canBoxSelect) {
+      suppressContextMenuRef.current = true;
+      rightPointerDownRef.current = null;
+      leftPointerDownRef.current = null;
+      boxSelectRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        currentX: e.clientX,
+        currentY: e.clientY,
+        mode: 'right-start',
+        active: true,
+      };
+      if (world?.camera.hasCameraControls()) {
+        world.camera.controls.enabled = false;
+      }
+      if (highlighter) {
+        highlighter.config.selectEnabled = false;
+      }
+      setSelectionBox({
+        startX: e.clientX,
+        startY: e.clientY,
+        currentX: e.clientX,
+        currentY: e.clientY,
+      });
+      return;
+    }
+
+    if (e.button === 0 && isCtrl && canBoxSelect) {
+      rightPointerDownRef.current = null;
+      leftPointerDownRef.current = null;
+      boxSelectRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        currentX: e.clientX,
+        currentY: e.clientY,
+        mode: 'left-drag',
+        active: false,
+      };
+      if (world?.camera.hasCameraControls()) {
+        world.camera.controls.enabled = false;
+      }
+      return;
+    }
+
     if (e.button === 2) {
+      suppressContextMenuRef.current = false;
       rightPointerDownRef.current = { x: e.clientX, y: e.clientY };
     } else {
       rightPointerDownRef.current = null;
@@ -698,6 +893,17 @@ export const ViewerCanvas: React.FC = () => {
     e.preventDefault();
     if (!isEngineReady) return;
 
+    if (
+      suppressContextMenuRef.current ||
+      boxSelectRef.current ||
+      e.ctrlKey ||
+      e.metaKey
+    ) {
+      suppressContextMenuRef.current = false;
+      rightPointerDownRef.current = null;
+      return;
+    }
+
     const downPos = rightPointerDownRef.current;
     rightPointerDownRef.current = null;
     if (downPos && Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 4) {
@@ -773,7 +979,7 @@ export const ViewerCanvas: React.FC = () => {
       <div
         id="viewer-container"
         ref={containerRef}
-        onPointerDown={handleViewportPointerDown}
+        onPointerDownCapture={handleViewportPointerDown}
         onPointerMove={(e) => void handleViewportPointerMove(e)}
         onPointerUp={(e) => void handleViewportPointerUp(e)}
         onPointerLeave={() => {
@@ -788,6 +994,47 @@ export const ViewerCanvas: React.FC = () => {
             : ''
         }`}
       />
+
+      {/* AutoCAD-style Rectangular Marquee Selection Box */}
+      {selectionBox && (() => {
+        const containerRect = containerRef.current?.getBoundingClientRect();
+        const offsetLeft = containerRect?.left ?? 0;
+        const offsetTop = containerRect?.top ?? 0;
+        const left = Math.min(selectionBox.startX, selectionBox.currentX) - offsetLeft;
+        const top = Math.min(selectionBox.startY, selectionBox.currentY) - offsetTop;
+        const width = Math.abs(selectionBox.currentX - selectionBox.startX);
+        const height = Math.abs(selectionBox.currentY - selectionBox.startY);
+        const isWindowSelection = selectionBox.currentX >= selectionBox.startX;
+
+        return (
+          <div
+            style={{ left, top, width, height }}
+            className={`absolute z-20 pointer-events-none ${
+              isWindowSelection
+                ? 'bg-sky-500/15 border-[1.5px] border-solid border-sky-400'
+                : 'bg-emerald-500/15'
+            }`}
+          >
+            {!isWindowSelection && width > 1 && height > 1 && (
+              <svg
+                className="w-full h-full overflow-visible block"
+                aria-hidden="true"
+              >
+                <rect
+                  x="0.75"
+                  y="0.75"
+                  width={Math.max(0, width - 1.5)}
+                  height={Math.max(0, height - 1.5)}
+                  fill="none"
+                  stroke="#4ade80"
+                  strokeWidth="1.5"
+                  strokeDasharray="6 4"
+                />
+              </svg>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Measure Snap Point Indicator (vertex dot or edge anchor dot; edges/planes highlight directly in 3D) */}
       {activeTool === 'measure' &&
