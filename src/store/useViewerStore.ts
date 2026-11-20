@@ -53,23 +53,9 @@ export interface LocalViewpoint {
   snapshotDataUrl?: string;
 }
 
-const ACTIVE_PROJECT_STORAGE_KEY = 'pavabim_active_project_id';
-
-function readSavedProjectId(): string | null {
+if (typeof window !== 'undefined') {
   try {
-    return window.localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function saveProjectId(projectId: string | null): void {
-  try {
-    if (projectId) {
-      window.localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, projectId);
-    } else {
-      window.localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);
-    }
+    window.localStorage.removeItem('pavabim_active_project_id');
   } catch {
     // Ignore storage quota or sandbox restrictions
   }
@@ -171,7 +157,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   localViewpoints: [],
 
   projects: [],
-  currentProjectId: readSavedProjectId(),
+  currentProjectId: null,
   currentProject: null,
   remoteModels: [],
   activeBcfTopicId: null,
@@ -378,14 +364,10 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
 
   setProjects: (projects) => {
     const preferredId = get().currentProjectId;
-    const isInitialLoad = get().projects.length === 0;
     const matched = preferredId
       ? projects.find((p) => p.id === preferredId) || null
-      : isInitialLoad
-        ? projects.find((p) => p.status === 'active') || projects[0] || null
-        : null;
+      : null;
 
-    saveProjectId(matched?.id ?? null);
     set({
       projects,
       currentProject: matched,
@@ -397,7 +379,6 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     const prevId = get().currentProjectId;
     const nextId = project?.id ?? null;
     const isProjectChanged = prevId !== nextId;
-    saveProjectId(nextId);
     set((state) => {
       const nextLoadedModels = isProjectChanged
         ? state.loadedModels.map((m) => {
@@ -447,7 +428,6 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   setActiveBcfTopicId: (activeBcfTopicId) => set({ activeBcfTopicId }),
 
   resetProjectContext: () => {
-    saveProjectId(null);
     set((state) => ({
       projects: [],
       currentProjectId: null,
