@@ -10,6 +10,7 @@ export interface ProjectRolePermissions {
   isAdmin: boolean;
   canCreateProject: boolean;
   canManageProject: boolean;
+  canRenameProject: boolean;
   canManageMembers: boolean;
   canSyncDrive: boolean;
   canManageModels: boolean;
@@ -48,6 +49,7 @@ export function useProjectRole(): ProjectRolePermissions {
     isAdmin,
     canCreateProject: isSuperAdmin,
     canManageProject: isAdmin,
+    canRenameProject: isSuperAdmin,
     canManageMembers: isAdmin,
     canSyncDrive: isEditorOrHigher,
     canManageModels: isEditorOrHigher,

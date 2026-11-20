@@ -28,6 +28,7 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
     isSuperAdmin,
     canCreateProject,
     canManageProject,
+    canRenameProject,
     canManageMembers,
     canSyncDrive,
   } = useProjectRole();
@@ -66,6 +67,14 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
   const [memberEmail, setMemberEmail] = useState('');
   const [memberRole, setMemberRole] = useState<ProjectRole>('editor');
   const [superAdminEmail, setSuperAdminEmail] = useState('');
+
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editedName, setEditedName] = useState('');
+
+  useEffect(() => {
+    setIsEditingName(false);
+    setEditedName(currentProject?.name || '');
+  }, [currentProject?.id, currentProject?.name, isOpen]);
 
   const projectId = currentProject?.id || '';
 
@@ -241,6 +250,30 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
     onError: (err) => setErrorMsg(getApiErrorMessage(err)),
   });
 
+  const renameProjectMutation = useMutation({
+    mutationFn: async (newName: string) => {
+      if (!currentProject) return;
+      return projectsService.updateProject(currentProject.id, {
+        name: newName.trim(),
+      });
+    },
+    onSuccess: (updated) => {
+      if (!updated) return;
+      setErrorMsg(null);
+      setIsEditingName(false);
+      setFeedback(`Nombre del proyecto actualizado a "${updated.name}".`);
+      if (currentProject) {
+        setCurrentProject({
+          ...currentProject,
+          ...updated,
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['project-summary', projectId] });
+    },
+    onError: (err) => setErrorMsg(getApiErrorMessage(err)),
+  });
+
   const toggleAutoConvertMutation = useMutation({
     mutationFn: (nextVal: boolean) =>
       settingsService.updateSettings({ autoConvertIfc: nextVal }),
@@ -379,11 +412,89 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
               {currentProject ? (
                 <>
                   <div className="rounded border border-asphalt-700 bg-asphalt-950/70 p-3.5 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-white">
-                        {currentProject.name}
-                      </span>
-                      <span className="rounded bg-pavasal-500/15 border border-pavasal-500/40 px-2 py-0.5 text-[10px] font-semibold uppercase text-pavasal-400">
+                    <div className="flex items-center justify-between gap-3">
+                      {isEditingName ? (
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <input
+                            type="text"
+                            value={editedName}
+                            onChange={(e) => setEditedName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                if (editedName.trim() && editedName.trim() !== currentProject.name) {
+                                  renameProjectMutation.mutate(editedName.trim());
+                                } else {
+                                  setIsEditingName(false);
+                                }
+                              } else if (e.key === 'Escape') {
+                                setIsEditingName(false);
+                                setEditedName(currentProject.name);
+                              }
+                            }}
+                            autoFocus
+                            disabled={renameProjectMutation.isPending}
+                            className="flex-1 rounded border border-pavasal-500 bg-asphalt-900 px-2 py-1 text-sm font-semibold text-white focus:outline-none"
+                            placeholder="Nombre del proyecto"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (editedName.trim() && editedName.trim() !== currentProject.name) {
+                                renameProjectMutation.mutate(editedName.trim());
+                              } else {
+                                setIsEditingName(false);
+                              }
+                            }}
+                            disabled={renameProjectMutation.isPending || !editedName.trim()}
+                            className="rounded bg-pavasal-500 px-2.5 py-1 text-xs font-bold text-asphalt-950 hover:bg-pavasal-400 disabled:opacity-50"
+                          >
+                            {renameProjectMutation.isPending ? 'Guardando...' : 'Guardar'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsEditingName(false);
+                              setEditedName(currentProject.name);
+                            }}
+                            disabled={renameProjectMutation.isPending}
+                            className="rounded border border-asphalt-700 bg-asphalt-800 px-2.5 py-1 text-xs text-asphalt-200 hover:text-white"
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <span className="font-semibold text-white truncate" title={currentProject.name}>
+                            {currentProject.name}
+                          </span>
+                          {canRenameProject && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditedName(currentProject.name);
+                                setIsEditingName(true);
+                              }}
+                              className="text-asphalt-400 hover:text-pavasal-400 transition-colors p-1 rounded hover:bg-asphalt-800 shrink-0"
+                              title="Cambiar nombre del proyecto (solo Superadmin)"
+                            >
+                              <svg
+                                className="w-3.5 h-3.5"
+                                viewBox="0 0 16 16"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.4"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                aria-hidden="true"
+                              >
+                                <path d="M11.5 2.5a1.414 1.414 0 0 1 2 2L4.5 13.5 1.5 14.5l1-3 9-9z" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      <span className="rounded bg-pavasal-500/15 border border-pavasal-500/40 px-2 py-0.5 text-[10px] font-semibold uppercase text-pavasal-400 shrink-0">
                         {currentProject.status}
                       </span>
                     </div>
