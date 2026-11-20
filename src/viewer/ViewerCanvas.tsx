@@ -149,6 +149,7 @@ export const ViewerCanvas: React.FC = () => {
   const handleClearAllMeasurements = useCallback(() => {
     clearMeasurements();
     measurePickReqIdRef.current++;
+    coordPickReqIdRef.current++;
     prevHoverAreaKeyRef.current = null;
     prevHoverVolumeKeyRef.current = null;
     setAnchorMeasureTarget(null);
@@ -157,6 +158,9 @@ export const ViewerCanvas: React.FC = () => {
     setHoverAreaFace(null);
     setVolumeItems([]);
     setHoverVolumeElement(null);
+    setPickedCoordinate(null);
+    setHoverCoordinate(null);
+    setCopiedCoordinateText(false);
   }, [clearMeasurements]);
 
   const handleUndoMeasurement = useCallback(() => {
@@ -231,9 +235,17 @@ export const ViewerCanvas: React.FC = () => {
           setFaceContextMenu(null);
           return;
         }
-        if (activeTool === 'measure' && anchorMeasureTargetRef.current) {
+        if (activeTool === 'measure' || activeTool === 'coordinates') {
           measurePickReqIdRef.current++;
+          coordPickReqIdRef.current++;
+          prevHoverAreaKeyRef.current = null;
+          prevHoverVolumeKeyRef.current = null;
           setAnchorMeasureTarget(null);
+          setHoverMeasureTarget(null);
+          setHoverAreaFace(null);
+          setHoverVolumeElement(null);
+          setHoverCoordinate(null);
+          setActiveTool('select');
           return;
         }
         if (activeTool === 'section') {
@@ -241,9 +253,14 @@ export const ViewerCanvas: React.FC = () => {
           setActiveTool('select');
           return;
         }
-        if (isCoordinatesActive || pickedCoordinate) {
-          setHoverCoordinate(null);
-          setPickedCoordinate(null);
+        if (
+          measurementCount > 0 ||
+          areaItems.length > 0 ||
+          volumeItems.length > 0 ||
+          pickedCoordinate !== null
+        ) {
+          handleClearAllMeasurements();
+          return;
         }
         clearSelection();
         setActiveTool('select');
@@ -283,15 +300,19 @@ export const ViewerCanvas: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     activeTool,
+    areaItems.length,
     cancelBoxSelect,
     clearSelection,
     faceContextMenu,
+    handleClearAllMeasurements,
     handleUndoMeasurement,
-    toggleHideSelectedElements,
     isEngineReady,
+    measurementCount,
     pickedCoordinate,
     selectedElementsMap,
     setActiveTool,
+    toggleHideSelectedElements,
+    volumeItems.length,
   ]);
 
   useEffect(() => {
