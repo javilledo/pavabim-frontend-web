@@ -61,6 +61,7 @@ interface ViewerState {
   cameraProjection: CameraProjectionMode;
   isGridVisible: boolean;
   isSectionActive: boolean;
+  isSectionGizmosVisible: boolean;
 
   // 3D Loaded Models & Standalone Loading State
   loadedModels: LoadedModel[];
@@ -89,6 +90,7 @@ interface ViewerState {
   toggleGrid: () => void;
   toggleSection: () => void;
   setSectionActive: (active: boolean) => void;
+  setSectionGizmosVisible: (visible: boolean) => void;
   setModelLoading: (loading: boolean, modelName?: string | null) => void;
   setViewerToastError: (error: string | null) => void;
   addLoadedModel: (model: LoadedModel) => void;
@@ -129,6 +131,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   cameraProjection: 'Perspective',
   isGridVisible: true,
   isSectionActive: false,
+  isSectionGizmosVisible: true,
 
   loadedModels: [],
   isLoadingModel: false,
@@ -160,6 +163,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     set((state) => ({ isSectionActive: !state.isSectionActive })),
 
   setSectionActive: (isSectionActive) => set({ isSectionActive }),
+
+  setSectionGizmosVisible: (isSectionGizmosVisible) =>
+    set({ isSectionGizmosVisible }),
 
   setModelLoading: (isLoadingModel, loadingModelName = null) =>
     set({ isLoadingModel, loadingModelName }),
@@ -381,6 +387,11 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
               selectedElementsMap: {},
               hiddenElementsMap: {},
               isIsolationActive: false,
+              isSectionActive: false,
+              isSectionGizmosVisible: true,
+              ...(state.activeTool === 'section'
+                ? { activeTool: 'select' as const }
+                : {}),
             }
           : {}),
       };
@@ -415,6 +426,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       selectedElementsMap: {},
       hiddenElementsMap: {},
       isIsolationActive: false,
+      isSectionActive: false,
+      isSectionGizmosVisible: true,
+      ...(state.activeTool === 'section' ? { activeTool: 'select' as const } : {}),
     }));
   },
 }));

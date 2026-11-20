@@ -108,6 +108,9 @@ export interface EngineContextValue {
   ) => Promise<PickedCoordinateResult | null>;
   createSectionFromFace: (point: THREE.Vector3, normal: THREE.Vector3) => void;
   lookPerpendicularToFace: (point: THREE.Vector3, normal: THREE.Vector3) => Promise<void>;
+  toggleSectionGizmosVisibility: (visible?: boolean) => void;
+  pickSectionPlaneAtClientPoint: (clientX: number, clientY: number) => string | null;
+  deleteSectionPlane: (planeId: string) => void;
   clearSections: () => void;
   measurementCount: number;
   pickMeasureTargetAtClientPoint: (
@@ -621,14 +624,14 @@ async function resolveAsyncSurfacePoint(
   const picker = components.get(OBC.FastModelPickers).get(world);
   const modelRaycasts = fragments.initialized
     ? Array.from(fragments.list.values()).map((model) =>
-        model
-          .raycast({
-            camera: world.camera.three,
-            mouse: clientPos,
-            dom: domElement,
-          })
-          .catch(() => null)
-      )
+      model
+        .raycast({
+          camera: world.camera.three,
+          mouse: clientPos,
+          dom: domElement,
+        })
+        .catch(() => null)
+    )
     : [];
 
   const [pickerPoint, ...modelHits] = await Promise.all([
@@ -868,6 +871,8 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     toggleGrid: toggleStoreGrid,
     toggleSection: toggleStoreSection,
     setSectionActive: setStoreSectionActive,
+    setSectionGizmosVisible: setStoreSectionGizmosVisible,
+    setActiveTool: setStoreActiveTool,
     setCameraProjection: setStoreCameraProjection,
     currentProjectId,
   } = useViewerStore();
@@ -964,16 +969,21 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         // Sync loaded models' frustum culling/LOD camera and store state when switching projections
         world.camera.projection.onChanged.add(
           (camera: THREE.PerspectiveCamera | THREE.OrthographicCamera) => {
-          orthoZoomTargetRef.current = null;
-          syncCameraNearPlane();
-          setStoreCameraProjection(world.camera.projection.current);
-          if (fragments.initialized) {
-            for (const [, model] of fragments.list) {
-              model.useCamera(camera);
+            orthoZoomTargetRef.current = null;
+            syncCameraNearPlane();
+            setStoreCameraProjection(world.camera.projection.current);
+            if (fragments.initialized) {
+              for (const [, model] of fragments.list) {
+                model.useCamera(camera);
+              }
+              void fragments.core.update(true);
             }
-            void fragments.core.update(true);
-          }
-        });
+            if (clipperRef.current) {
+              for (const [, plane] of clipperRef.current.list) {
+                plane.controls.camera = camera;
+              }
+            }
+          });
         setStoreCameraProjection(world.camera.projection.current);
 
         // Trigger LOD / fragments redraw on camera rest
@@ -991,6 +1001,13 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         const domElement = world.renderer.three.domElement;
         const handleOrbitAnchorPointerDown = (event: PointerEvent) => {
           if (event.button !== 0 || activeToolRef.current === 'pan') return;
+          if (clipperRef.current) {
+            for (const [, plane] of clipperRef.current.list) {
+              if (plane.controls.enabled && plane.controls.axis !== null) {
+                return;
+              }
+            }
+          }
           const currentWorld = worldRef.current;
           if (!currentWorld?.camera.hasCameraControls()) return;
           const controls = currentWorld.camera.controls;
@@ -1215,6 +1232,14 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         // Clipper setup
         const clipper = components.get(OBC.Clipper);
         clipper.enabled = false;
+        clipper.localClippingPlanes = true;
+        for (const [, material] of fragments.core.models.materials.list) {
+          material.clippingPlanes = world.renderer.clippingPlanes;
+        }
+        clipper.onAfterDrag.add(() => {
+          world.renderer?.updateClippingPlanes();
+          void fragmentsRef.current?.core.update(true);
+        });
         clipperRef.current = clipper;
 
         // Length Measurement setup (visual lines + labels rendered via OBCF.LengthMeasurement,
@@ -1595,6 +1620,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setMeasurementCount(0);
     setIsEngineReady(false);
     setStoreSectionActive(false);
+    setStoreSectionGizmosVisible(true);
     setStoreCameraProjection('Perspective');
     clearLoadedModels();
     if (componentsRef.current) {
@@ -1611,7 +1637,12 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       lengthMeasurementRef.current = null;
       gridRef.current = null;
     }
-  }, [clearLoadedModels, setStoreCameraProjection, setStoreSectionActive]);
+  }, [
+    clearLoadedModels,
+    setStoreCameraProjection,
+    setStoreSectionActive,
+    setStoreSectionGizmosVisible,
+  ]);
 
   const loadModelFromBuffer = useCallback(
     async (
@@ -1664,6 +1695,9 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
         setModelHierarchyVisibility(model, initialVisible);
         world.scene.three.add(model.object);
+        if (world.renderer) {
+          model.useClippingPlanes(world.renderer.clippingPlanes);
+        }
         await fragments.core.update(true);
 
         addLoadedModel({
@@ -2162,145 +2196,145 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     []
   );
 
-interface FragmentMapConversion {
-  eastings?: number | null;
-  northings?: number | null;
-  orthogonalHeight?: number | null;
-  xAxisAbscissa?: number | null;
-  xAxisOrdinate?: number | null;
-  scale?: number | null;
-}
+  interface FragmentMapConversion {
+    eastings?: number | null;
+    northings?: number | null;
+    orthogonalHeight?: number | null;
+    xAxisAbscissa?: number | null;
+    xAxisOrdinate?: number | null;
+    scale?: number | null;
+  }
 
-interface FragmentCrsInfo {
-  name?: string | null;
-  mapConversion?: FragmentMapConversion | null;
-}
+  interface FragmentCrsInfo {
+    name?: string | null;
+    mapConversion?: FragmentMapConversion | null;
+  }
 
-const modelCrsCache = new WeakMap<
-  FRAGS.FragmentsModel,
-  Promise<FragmentCrsInfo | null>
->();
+  const modelCrsCache = new WeakMap<
+    FRAGS.FragmentsModel,
+    Promise<FragmentCrsInfo | null>
+  >();
 
-const getModelCrsCached = async (
-  model: FRAGS.FragmentsModel
-): Promise<FragmentCrsInfo | null> => {
-  const cached = modelCrsCache.get(model);
-  if (cached) return cached;
+  const getModelCrsCached = async (
+    model: FRAGS.FragmentsModel
+  ): Promise<FragmentCrsInfo | null> => {
+    const cached = modelCrsCache.get(model);
+    if (cached) return cached;
 
-  const modelWithCrs = model as FRAGS.FragmentsModel & {
-    getCRS?: () => Promise<FragmentCrsInfo | null>;
+    const modelWithCrs = model as FRAGS.FragmentsModel & {
+      getCRS?: () => Promise<FragmentCrsInfo | null>;
+    };
+    const promise =
+      typeof modelWithCrs.getCRS === 'function'
+        ? modelWithCrs.getCRS().catch(() => null)
+        : Promise.resolve(null);
+    modelCrsCache.set(model, promise);
+    return promise;
   };
-  const promise =
-    typeof modelWithCrs.getCRS === 'function'
-      ? modelWithCrs.getCRS().catch(() => null)
-      : Promise.resolve(null);
-  modelCrsCache.set(model, promise);
-  return promise;
-};
 
-const resolveHitFragmentsModel = (
-  fragments: OBC.FragmentsManager | null,
-  hitFragments: unknown,
-  hitObject: THREE.Object3D | undefined
-): FRAGS.FragmentsModel | null => {
-  if (!fragments) return null;
+  const resolveHitFragmentsModel = (
+    fragments: OBC.FragmentsManager | null,
+    hitFragments: unknown,
+    hitObject: THREE.Object3D | undefined
+  ): FRAGS.FragmentsModel | null => {
+    if (!fragments) return null;
 
-  if (
-    hitFragments &&
-    typeof hitFragments === 'object' &&
-    'modelId' in hitFragments &&
-    typeof (hitFragments as { modelId?: unknown }).modelId === 'string'
-  ) {
-    const modelId = (hitFragments as { modelId: string }).modelId;
-    return fragments.list.get(modelId) ?? (hitFragments as FRAGS.FragmentsModel);
-  }
-
-  let current: THREE.Object3D | null = hitObject ?? null;
-  while (current) {
-    for (const model of fragments.list.values()) {
-      if (model.object === current) return model;
+    if (
+      hitFragments &&
+      typeof hitFragments === 'object' &&
+      'modelId' in hitFragments &&
+      typeof (hitFragments as { modelId?: unknown }).modelId === 'string'
+    ) {
+      const modelId = (hitFragments as { modelId: string }).modelId;
+      return fragments.list.get(modelId) ?? (hitFragments as FRAGS.FragmentsModel);
     }
-    current = current.parent;
-  }
 
-  if (fragments.baseCoordinationModel) {
-    const baseModel = fragments.list.get(fragments.baseCoordinationModel);
-    if (baseModel) return baseModel;
-  }
+    let current: THREE.Object3D | null = hitObject ?? null;
+    while (current) {
+      for (const model of fragments.list.values()) {
+        if (model.object === current) return model;
+      }
+      current = current.parent;
+    }
 
-  return fragments.list.values().next().value ?? null;
-};
+    if (fragments.baseCoordinationModel) {
+      const baseModel = fragments.list.get(fragments.baseCoordinationModel);
+      if (baseModel) return baseModel;
+    }
 
-/**
- * Transforms a picked Three.js viewer world point back into true georeferenced
- * civil/BIM coordinates `(X = Easting, Y = Northing, Z = Elevation)` by:
- * 1. Undoing the model's `object.matrixWorld` (which includes multi-model `autoCoordinate` offsets).
- * 2. Applying the inverse of the model's `web-ifc` `COORDINATE_TO_ORIGIN` coordination matrix.
- * 3. Mapping Three.js Y-up (`x, y, z`) to IFC right-handed Z-up (`x, -z, y`).
- * 4. Applying `IfcMapConversion` when an IFC4/4.3 CRS shift/scale is defined on the model.
- */
-const worldPointToGeoreferenced = async (
-  worldPoint: THREE.Vector3,
-  model: FRAGS.FragmentsModel | null,
-  fragments: OBC.FragmentsManager | null
-): Promise<GeoreferencedCoordinates> => {
-  const localPoint = worldPoint.clone();
+    return fragments.list.values().next().value ?? null;
+  };
 
-  if (model) {
-    model.object.updateMatrixWorld(true);
-    localPoint.applyMatrix4(model.object.matrixWorld.clone().invert());
+  /**
+   * Transforms a picked Three.js viewer world point back into true georeferenced
+   * civil/BIM coordinates `(X = Easting, Y = Northing, Z = Elevation)` by:
+   * 1. Undoing the model's `object.matrixWorld` (which includes multi-model `autoCoordinate` offsets).
+   * 2. Applying the inverse of the model's `web-ifc` `COORDINATE_TO_ORIGIN` coordination matrix.
+   * 3. Mapping Three.js Y-up (`x, y, z`) to IFC right-handed Z-up (`x, -z, y`).
+   * 4. Applying `IfcMapConversion` when an IFC4/4.3 CRS shift/scale is defined on the model.
+   */
+  const worldPointToGeoreferenced = async (
+    worldPoint: THREE.Vector3,
+    model: FRAGS.FragmentsModel | null,
+    fragments: OBC.FragmentsManager | null
+  ): Promise<GeoreferencedCoordinates> => {
+    const localPoint = worldPoint.clone();
 
-    const coordinationMatrix = await model.getCoordinationMatrix().catch(() => null);
-    if (coordinationMatrix) {
-      localPoint.applyMatrix4(coordinationMatrix.clone().invert());
+    if (model) {
+      model.object.updateMatrixWorld(true);
+      localPoint.applyMatrix4(model.object.matrixWorld.clone().invert());
+
+      const coordinationMatrix = await model.getCoordinationMatrix().catch(() => null);
+      if (coordinationMatrix) {
+        localPoint.applyMatrix4(coordinationMatrix.clone().invert());
+      } else if (fragments?.baseCoordinationMatrix) {
+        localPoint.applyMatrix4(fragments.baseCoordinationMatrix.clone().invert());
+      }
     } else if (fragments?.baseCoordinationMatrix) {
       localPoint.applyMatrix4(fragments.baseCoordinationMatrix.clone().invert());
     }
-  } else if (fragments?.baseCoordinationMatrix) {
-    localPoint.applyMatrix4(fragments.baseCoordinationMatrix.clone().invert());
-  }
 
-  // Three.js (Y-up: +X East, +Y Up, -Z North) -> IFC/Civil Z-up (+X East, +Y North, +Z Elevation)
-  let x = localPoint.x;
-  let y = -localPoint.z;
-  let z = localPoint.y;
+    // Three.js (Y-up: +X East, +Y Up, -Z North) -> IFC/Civil Z-up (+X East, +Y North, +Z Elevation)
+    let x = localPoint.x;
+    let y = -localPoint.z;
+    let z = localPoint.y;
 
-  const crs = model ? await getModelCrsCached(model) : null;
-  const mapConv = crs?.mapConversion;
-  if (mapConv) {
-    const eastings = Number(mapConv.eastings ?? 0) || 0;
-    const northings = Number(mapConv.northings ?? 0) || 0;
-    const orthogonalHeight = Number(mapConv.orthogonalHeight ?? 0) || 0;
-    const scale = Number(mapConv.scale ?? 1) || 1;
-    const hasMapTransform =
-      Math.abs(eastings) > 1e-6 ||
-      Math.abs(northings) > 1e-6 ||
-      Math.abs(orthogonalHeight) > 1e-6 ||
-      Math.abs(scale - 1) > 1e-6;
+    const crs = model ? await getModelCrsCached(model) : null;
+    const mapConv = crs?.mapConversion;
+    if (mapConv) {
+      const eastings = Number(mapConv.eastings ?? 0) || 0;
+      const northings = Number(mapConv.northings ?? 0) || 0;
+      const orthogonalHeight = Number(mapConv.orthogonalHeight ?? 0) || 0;
+      const scale = Number(mapConv.scale ?? 1) || 1;
+      const hasMapTransform =
+        Math.abs(eastings) > 1e-6 ||
+        Math.abs(northings) > 1e-6 ||
+        Math.abs(orthogonalHeight) > 1e-6 ||
+        Math.abs(scale - 1) > 1e-6;
 
-    if (hasMapTransform) {
-      const ax = Number(mapConv.xAxisAbscissa ?? 1);
-      const ay = Number(mapConv.xAxisOrdinate ?? 0);
-      const axisLen = Math.hypot(ax, ay);
-      const cosA = axisLen > 1e-9 ? ax / axisLen : 1;
-      const sinA = axisLen > 1e-9 ? ay / axisLen : 0;
+      if (hasMapTransform) {
+        const ax = Number(mapConv.xAxisAbscissa ?? 1);
+        const ay = Number(mapConv.xAxisOrdinate ?? 0);
+        const axisLen = Math.hypot(ax, ay);
+        const cosA = axisLen > 1e-9 ? ax / axisLen : 1;
+        const sinA = axisLen > 1e-9 ? ay / axisLen : 0;
 
-      const mappedX = eastings + scale * (x * cosA - y * sinA);
-      const mappedY = northings + scale * (x * sinA + y * cosA);
-      const mappedZ = orthogonalHeight + scale * z;
-      x = mappedX;
-      y = mappedY;
-      z = mappedZ;
+        const mappedX = eastings + scale * (x * cosA - y * sinA);
+        const mappedY = northings + scale * (x * sinA + y * cosA);
+        const mappedZ = orthogonalHeight + scale * z;
+        x = mappedX;
+        y = mappedY;
+        z = mappedZ;
+      }
     }
-  }
 
-  return {
-    x,
-    y,
-    z,
-    crsName: crs?.name ?? null,
+    return {
+      x,
+      y,
+      z,
+      crsName: crs?.name ?? null,
+    };
   };
-};
 
   const pickCoordinateAtClientPoint = useCallback(
     async (
@@ -2390,7 +2424,9 @@ const worldPointToGeoreferenced = async (
       const world = worldRef.current;
       if (!clipper || !world) return;
 
+      const isGizmosVisible = useViewerStore.getState().isSectionGizmosVisible;
       clipper.enabled = true;
+      clipper.visible = isGizmosVisible;
       const outwardNormal = orientOutwardNormal(normal, point, world.camera.three);
       const planeNormal = outwardNormal.clone().negate();
       const planeId = clipper.createFromNormalAndCoplanarPoint(
@@ -2400,14 +2436,41 @@ const worldPointToGeoreferenced = async (
       );
       const plane = clipper.list.get(planeId);
       if (plane) {
-        plane.visible = clipper.visible;
         plane.size = clipper.size;
+        plane.visible = isGizmosVisible;
+        plane.controls.enabled = isGizmosVisible;
+        plane.controls.getHelper().visible = isGizmosVisible;
+        plane.helper.visible = isGizmosVisible;
       }
       world.renderer?.updateClippingPlanes();
       void fragmentsRef.current?.core.update(true);
       setStoreSectionActive(clipper.list.size > 0);
     },
     [setStoreSectionActive]
+  );
+
+  const toggleSectionGizmosVisibility = useCallback(
+    (visible?: boolean) => {
+      const nextVisible =
+        visible !== undefined
+          ? visible
+          : !useViewerStore.getState().isSectionGizmosVisible;
+      setStoreSectionGizmosVisible(nextVisible);
+
+      const clipper = clipperRef.current;
+      if (!clipper) return;
+
+      clipper.visible = nextVisible;
+      for (const [, plane] of clipper.list) {
+        plane.visible = nextVisible;
+        plane.controls.enabled = nextVisible;
+        plane.controls.getHelper().visible = nextVisible;
+        plane.helper.visible = nextVisible;
+      }
+      worldRef.current?.renderer?.updateClippingPlanes();
+      worldRef.current?.renderer?.update();
+    },
+    [setStoreSectionGizmosVisible]
   );
 
   const lookPerpendicularToFace = useCallback(
@@ -2468,16 +2531,108 @@ const worldPointToGeoreferenced = async (
     []
   );
 
+  const pickSectionPlaneAtClientPoint = useCallback(
+    (clientX: number, clientY: number): string | null => {
+      const clipper = clipperRef.current;
+      const world = worldRef.current;
+      const domElement = world?.renderer?.three.domElement;
+      if (!clipper || !world || !domElement || clipper.list.size === 0) {
+        return null;
+      }
+
+      const rect = domElement.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+
+      const ndc = new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1
+      );
+
+      const targets: THREE.Object3D[] = [];
+      const targetToPlaneId = new Map<THREE.Object3D, string>();
+
+      const addTarget = (obj: THREE.Object3D, planeId: string) => {
+        if (targetToPlaneId.has(obj)) return;
+        targetToPlaneId.set(obj, planeId);
+        targets.push(obj);
+      };
+
+      const isVisibleBranch = (node: THREE.Object3D, root: THREE.Object3D): boolean => {
+        let cur: THREE.Object3D | null = node;
+        while (cur) {
+          if (!cur.visible) return false;
+          if (cur === root) return true;
+          cur = cur.parent;
+        }
+        return true;
+      };
+
+      for (const [planeId, plane] of clipper.list) {
+        if (!plane.enabled || !plane.visible) continue;
+
+        for (const mesh of plane.meshes) {
+          addTarget(mesh, planeId);
+        }
+
+        const helperRoot = plane.controls.getHelper();
+        const gizmoObj = helperRoot.children[0];
+        if (gizmoObj) {
+          gizmoObj.traverse((child) => {
+            if (child instanceof THREE.Mesh && isVisibleBranch(child, gizmoObj)) {
+              addTarget(child, planeId);
+            }
+          });
+        }
+      }
+
+      if (targets.length === 0) return null;
+
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(ndc, world.camera.three);
+      const hits = raycaster.intersectObjects(targets, false);
+      if (hits.length === 0) return null;
+
+      return targetToPlaneId.get(hits[0].object) ?? null;
+    },
+    []
+  );
+
+  const deleteSectionPlane = useCallback(
+    (planeId: string) => {
+      const clipper = clipperRef.current;
+      if (!clipper || !clipper.list.has(planeId)) return;
+
+      clipper.list.delete(planeId);
+      if (clipper.list.size === 0) {
+        clipper.enabled = false;
+        clipper.visible = true;
+        setStoreSectionActive(false);
+        setStoreSectionGizmosVisible(true);
+      } else {
+        setStoreSectionActive(true);
+      }
+      worldRef.current?.renderer?.updateClippingPlanes();
+      void fragmentsRef.current?.core.update(true);
+      worldRef.current?.renderer?.update();
+    },
+    [setStoreSectionActive, setStoreSectionGizmosVisible]
+  );
+
   const clearSections = useCallback(() => {
     const clipper = clipperRef.current;
     if (!clipper) return;
 
     clipper.deleteAll();
     clipper.enabled = false;
+    clipper.visible = true;
     worldRef.current?.renderer?.updateClippingPlanes();
     void fragmentsRef.current?.core.update(true);
     setStoreSectionActive(false);
-  }, [setStoreSectionActive]);
+    setStoreSectionGizmosVisible(true);
+    if (useViewerStore.getState().activeTool === 'section') {
+      setStoreActiveTool('select');
+    }
+  }, [setStoreActiveTool, setStoreSectionActive, setStoreSectionGizmosVisible]);
 
   const pickMeasureTargetAtClientPoint = useCallback(
     async (
@@ -2617,7 +2772,7 @@ const worldPointToGeoreferenced = async (
         fragPick !== null &&
         (!meshPick ||
           camPos.distanceToSquared(fragPick.point) <=
-            camPos.distanceToSquared(meshPick.point) + 1e-4);
+          camPos.distanceToSquared(meshPick.point) + 1e-4);
 
       if (useFragPick && fragPick) {
         const worldPerPx = getWorldPerPixel(fragPick.point);
@@ -3087,16 +3242,18 @@ const worldPointToGeoreferenced = async (
 
       // 1. Clear highlighters
       if (highlighterRef.current) {
-        await highlighterRef.current.clear('select').catch(() => {});
-        await highlighterRef.current.clear('measure-volume').catch(() => {});
-        await highlighterRef.current.clear('measure-volume-hover').catch(() => {});
+        await highlighterRef.current.clear('select').catch(() => { });
+        await highlighterRef.current.clear('measure-volume').catch(() => { });
+        await highlighterRef.current.clear('measure-volume-hover').catch(() => { });
       }
 
       // 2. Clear clipper planes
       if (clipperRef.current) {
         clipperRef.current.deleteAll();
         clipperRef.current.enabled = false;
+        clipperRef.current.visible = true;
         setStoreSectionActive(false);
+        setStoreSectionGizmosVisible(true);
       }
 
       // 3. Reset hider
@@ -3170,7 +3327,13 @@ const worldPointToGeoreferenced = async (
     };
 
     void syncEngineToProject();
-  }, [clearMeasurements, currentProjectId, isEngineReady, setStoreSectionActive]);
+  }, [
+    clearMeasurements,
+    currentProjectId,
+    isEngineReady,
+    setStoreSectionActive,
+    setStoreSectionGizmosVisible,
+  ]);
 
   const pickAreaFaceAtClientPoint = useCallback(
     async (clientX: number, clientY: number): Promise<AreaFaceMeasurement | null> => {
@@ -3203,7 +3366,7 @@ const worldPointToGeoreferenced = async (
         fragPick !== null &&
         (!meshPick ||
           camPos.distanceToSquared(fragPick.point) <=
-            camPos.distanceToSquared(meshPick.point) + 1e-4);
+          camPos.distanceToSquared(meshPick.point) + 1e-4);
 
       const buildFaceKey = (
         modelId: string | undefined,
@@ -3220,14 +3383,14 @@ const worldPointToGeoreferenced = async (
         const worldPerPx =
           camera instanceof THREE.PerspectiveCamera
             ? (2 *
-                Math.max(0.01, fragPick.point.distanceTo(camPos)) *
-                Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) /
-              rect.height
+              Math.max(0.01, fragPick.point.distanceTo(camPos)) *
+              Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)) /
+            rect.height
             : Math.abs(
-                (camera as THREE.OrthographicCamera).top -
-                  (camera as THREE.OrthographicCamera).bottom
-              ) /
-              (Math.max(1e-6, (camera as THREE.OrthographicCamera).zoom) * rect.height);
+              (camera as THREE.OrthographicCamera).top -
+              (camera as THREE.OrthographicCamera).bottom
+            ) /
+            (Math.max(1e-6, (camera as THREE.OrthographicCamera).zoom) * rect.height);
         snapResolver.maxDistance = Math.max(worldPerPx * 40, 0.5);
         let faceRes = null;
         try {
@@ -3770,6 +3933,9 @@ const worldPointToGeoreferenced = async (
         pickCoordinateAtClientPoint,
         createSectionFromFace,
         lookPerpendicularToFace,
+        toggleSectionGizmosVisibility,
+        pickSectionPlaneAtClientPoint,
+        deleteSectionPlane,
         clearSections,
         measurementCount,
         pickMeasureTargetAtClientPoint,

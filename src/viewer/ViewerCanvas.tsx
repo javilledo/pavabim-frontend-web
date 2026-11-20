@@ -17,6 +17,7 @@ interface FaceContextMenuState {
   x: number;
   y: number;
   faceHit: SurfaceFaceHit | null;
+  sectionPlaneId: string | null;
 }
 
 interface ScreenPoint {
@@ -35,6 +36,7 @@ export const ViewerCanvas: React.FC = () => {
   const contextMenuReqIdRef = useRef(0);
   const coordPickReqIdRef = useRef(0);
   const measurePickReqIdRef = useRef(0);
+  const sectionPickReqIdRef = useRef(0);
   const hoverPickInFlightRef = useRef(false);
   const lastHoverCheckTsRef = useRef(0);
   const {
@@ -60,13 +62,13 @@ export const ViewerCanvas: React.FC = () => {
     updateVolumeHoverOverlay,
     createSectionFromFace,
     lookPerpendicularToFace,
-    clearSections,
+    pickSectionPlaneAtClientPoint,
+    deleteSectionPlane,
     clipper,
   } = useEngine();
   const {
     activeTool,
     measureMode,
-    isSectionActive,
     loadedModels,
     isLoadingModel,
     loadingModelName,
@@ -196,6 +198,11 @@ export const ViewerCanvas: React.FC = () => {
           setAnchorMeasureTarget(null);
           return;
         }
+        if (activeTool === 'section') {
+          sectionPickReqIdRef.current++;
+          setActiveTool('select');
+          return;
+        }
         if (isCoordinatesActive || pickedCoordinate) {
           setHoverCoordinate(null);
           setPickedCoordinate(null);
@@ -304,7 +311,10 @@ export const ViewerCanvas: React.FC = () => {
     if (activeTool !== 'measure') {
       measurePickReqIdRef.current++;
     }
-    if (!isCoordinatesActive && activeTool !== 'measure') {
+    if (activeTool !== 'section') {
+      sectionPickReqIdRef.current++;
+    }
+    if (!isCoordinatesActive && activeTool !== 'measure' && activeTool !== 'section') {
       leftPointerDownRef.current = null;
     }
   }, [activeTool, measureMode, isCoordinatesActive]);
@@ -452,6 +462,19 @@ export const ViewerCanvas: React.FC = () => {
     projectWorldPoint,
   ]);
 
+  const isInteractingWithSectionGizmo = useCallback((): boolean => {
+    if (!clipper) return false;
+    for (const [, plane] of clipper.list) {
+      if (
+        plane.controls.enabled &&
+        (plane.controls.dragging || plane.controls.axis !== null)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }, [clipper]);
+
   const handleViewportPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button === 2) {
       rightPointerDownRef.current = { x: e.clientX, y: e.clientY };
@@ -459,8 +482,15 @@ export const ViewerCanvas: React.FC = () => {
       rightPointerDownRef.current = null;
     }
 
-    if (e.button === 0 && (isCoordinatesActive || activeTool === 'measure')) {
-      leftPointerDownRef.current = { x: e.clientX, y: e.clientY };
+    if (
+      e.button === 0 &&
+      (isCoordinatesActive || activeTool === 'measure' || activeTool === 'section')
+    ) {
+      const hittingSectionGizmo =
+        activeTool === 'section' && isInteractingWithSectionGizmo();
+      leftPointerDownRef.current = hittingSectionGizmo
+        ? null
+        : { x: e.clientX, y: e.clientY };
     } else {
       leftPointerDownRef.current = null;
     }
@@ -535,7 +565,7 @@ export const ViewerCanvas: React.FC = () => {
   const handleViewportPointerUp = async (e: React.PointerEvent<HTMLDivElement>) => {
     if (
       e.button !== 0 ||
-      (!isCoordinatesActive && activeTool !== 'measure') ||
+      (!isCoordinatesActive && activeTool !== 'measure' && activeTool !== 'section') ||
       !isEngineReady
     ) {
       return;
@@ -544,6 +574,24 @@ export const ViewerCanvas: React.FC = () => {
     const downPos = leftPointerDownRef.current;
     leftPointerDownRef.current = null;
     if (!downPos || Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 4) {
+      return;
+    }
+
+    if (activeToolRef.current === 'section') {
+      if (isInteractingWithSectionGizmo()) {
+        return;
+      }
+
+      const reqId = ++sectionPickReqIdRef.current;
+      const faceHit = await pickFaceAtClientPoint(e.clientX, e.clientY);
+      if (reqId !== sectionPickReqIdRef.current || activeToolRef.current !== 'section') {
+        return;
+      }
+
+      if (faceHit) {
+        createSectionFromFace(faceHit.point, faceHit.normal);
+        setActiveTool('select');
+      }
       return;
     }
 
@@ -665,20 +713,20 @@ export const ViewerCanvas: React.FC = () => {
     const reqId = ++contextMenuReqIdRef.current;
     const clientX = e.clientX;
     const clientY = e.clientY;
+    const sectionPlaneId = pickSectionPlaneAtClientPoint(clientX, clientY);
     const faceHit = await pickFaceAtClientPoint(clientX, clientY);
     if (reqId !== contextMenuReqIdRef.current) return;
 
-    const hasActiveSections = (clipper?.list.size ?? 0) > 0 || isSectionActive;
-    if (!faceHit && !hasActiveSections) {
+    if (!faceHit && !sectionPlaneId) {
       setFaceContextMenu(null);
       return;
     }
 
     const menuWidth = 216;
-    const menuHeight = faceHit && hasActiveSections ? 124 : faceHit ? 84 : 44;
+    const menuHeight = faceHit && sectionPlaneId ? 124 : faceHit ? 84 : 44;
     const x = Math.min(clientX, Math.max(8, window.innerWidth - menuWidth - 8));
     const y = Math.min(clientY, Math.max(8, window.innerHeight - menuHeight - 8));
-    setFaceContextMenu({ x, y, faceHit });
+    setFaceContextMenu({ x, y, faceHit, sectionPlaneId });
   };
 
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
@@ -704,8 +752,6 @@ export const ViewerCanvas: React.FC = () => {
     await loadLocalFragFiles(e.target.files);
     e.target.value = '';
   };
-
-  const hasActiveSections = (clipper?.list.size ?? 0) > 0 || isSectionActive;
 
   return (
     <div
@@ -737,7 +783,7 @@ export const ViewerCanvas: React.FC = () => {
         }}
         onContextMenu={(e) => void handleViewportContextMenu(e)}
         className={`w-full h-full bg-asphalt-950 ${
-          isCoordinatesActive || activeTool === 'measure'
+          isCoordinatesActive || activeTool === 'measure' || activeTool === 'section'
             ? 'cursor-crosshair'
             : ''
         }`}
@@ -965,15 +1011,16 @@ export const ViewerCanvas: React.FC = () => {
               </button>
             </>
           )}
-          {faceContextMenu.faceHit && hasActiveSections && (
+          {faceContextMenu.faceHit && faceContextMenu.sectionPlaneId && (
             <div className="my-1 h-px bg-asphalt-700" />
           )}
-          {hasActiveSections && (
+          {faceContextMenu.sectionPlaneId && (
             <button
               type="button"
               role="menuitem"
               onClick={() => {
-                clearSections();
+                const sectionId = faceContextMenu.sectionPlaneId;
+                if (sectionId) deleteSectionPlane(sectionId);
                 setFaceContextMenu(null);
               }}
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-red-300 hover:bg-red-500/20 hover:text-red-100 transition-colors"
@@ -990,7 +1037,7 @@ export const ViewerCanvas: React.FC = () => {
               >
                 <path d="M4 4l8 8M12 4l-8 8" />
               </svg>
-              <span>Eliminar secciones</span>
+              <span>Eliminar sección</span>
             </button>
           )}
         </div>
@@ -1108,6 +1155,19 @@ export const ViewerCanvas: React.FC = () => {
             </div>
           </div>
         )
+      )}
+
+      {/* Active Section Face Selection Prompt Hint */}
+      {isEngineReady && hasVisibleModels && activeTool === 'section' && (
+        <div className="absolute bottom-4 left-4 z-20 pointer-events-none">
+          <div className="bg-asphalt-900/95 backdrop-blur border border-pavasal-500/50 px-3.5 py-2 rounded-lg text-xs text-asphalt-100 shadow-xl flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-pavasal-500 animate-pulse shrink-0" />
+            <span>
+              Pincha con clic izquierdo sobre una cara del modelo para crear una{' '}
+              <strong className="text-pavasal-400">sección</strong> (Esc para cancelar)
+            </span>
+          </div>
+        </div>
       )}
 
       {/* Active Area / Volume Measure Prompt Hint when empty */}

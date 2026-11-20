@@ -48,6 +48,7 @@ export const RibbonToolbar: React.FC = () => {
     cameraProjection,
     isGridVisible,
     isSectionActive,
+    isSectionGizmosVisible,
     loadedModels,
     selectedElementsMap,
     hiddenElementsMap,
@@ -65,6 +66,7 @@ export const RibbonToolbar: React.FC = () => {
     isEngineReady,
     setPlanView,
     toggleGridVisibility,
+    toggleSectionGizmosVisibility,
     clearSections,
     setCameraProjection,
     hideSelectedElements,
@@ -472,17 +474,131 @@ export const RibbonToolbar: React.FC = () => {
               <path d="M6 2v12M10 2v12M2 6h12M2 10h12" />
             </svg>
           </button>
-          {isSectionActive && (
+          <div className="h-4 w-px bg-asphalt-700 mx-1 shrink-0" />
+
+          {/* Section / Clipping Planes Group */}
+          <div
+            role="group"
+            aria-label="Planos de sección"
+            className="flex items-center gap-0.5 rounded bg-asphalt-950/80 border border-asphalt-700/80 p-0.5 shrink-0"
+          >
+            {/* 1. Crear sección (Activar modo de selección de cara) */}
+            <button
+              type="button"
+              onClick={() =>
+                setActiveTool(activeTool === 'section' ? 'select' : 'section')
+              }
+              disabled={!isEngineReady}
+              aria-pressed={activeTool === 'section'}
+              className={`px-2 py-1 rounded text-xs transition-colors flex items-center gap-1.5 whitespace-nowrap disabled:opacity-40 ${
+                activeTool === 'section'
+                  ? 'bg-pavasal-500 text-asphalt-950 font-semibold shadow-sm'
+                  : 'text-asphalt-200 font-medium hover:bg-asphalt-800 hover:text-white'
+              }`}
+              title={
+                activeTool === 'section'
+                  ? 'Cancelar selección de cara (Esc)'
+                  : 'Crear sección (seleccionar cara con clic izquierdo)'
+              }
+            >
+              <svg
+                className="w-3.5 h-3.5 shrink-0"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M2 8h12" strokeDasharray="2 2" />
+                <path d="M4.5 3.5v9M11.5 3.5v9" />
+              </svg>
+              <span>Crear sección</span>
+            </button>
+
+            {/* 2. Mostrar / Ocultar controles (gizmos) de sección */}
+            <button
+              type="button"
+              onClick={() => toggleSectionGizmosVisibility()}
+              disabled={!isEngineReady}
+              aria-label="Mostrar u ocultar controles de sección"
+              aria-pressed={!isSectionGizmosVisible}
+              className={`px-2 py-1 rounded text-xs transition-colors flex items-center gap-1 whitespace-nowrap disabled:opacity-40 ${
+                !isSectionGizmosVisible
+                  ? 'bg-pavasal-500 text-asphalt-950 font-semibold shadow-sm'
+                  : isSectionActive
+                    ? 'text-pavasal-300 hover:bg-asphalt-800 hover:text-white font-medium'
+                    : 'text-asphalt-200 font-medium hover:bg-asphalt-800 hover:text-white'
+              }`}
+              title={
+                isSectionGizmosVisible
+                  ? 'Mostrar/Ocultar controles de sección (actualmente visibles)'
+                  : 'Mostrar/Ocultar controles de sección (actualmente ocultos)'
+              }
+            >
+              {isSectionGizmosVisible ? (
+                <svg
+                  className="w-3.5 h-3.5 shrink-0"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M1.5 8C2.6 5.3 5.1 3.5 8 3.5S13.4 5.3 14.5 8c-1.1 2.7-3.6 4.5-6.5 4.5S2.6 10.7 1.5 8Z" />
+                  <circle cx="8" cy="8" r="2" />
+                </svg>
+              ) : (
+                <svg
+                  className="w-3.5 h-3.5 shrink-0"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M2 2l12 12M6.5 6.6a2 2 0 0 0 2.9 2.8M4.3 4.5C2.8 5.4 1.8 6.8 1.5 8c.9 2.7 3.6 4.5 6.5 4.5 1.3 0 2.6-.4 3.7-1M9.2 3.7C11.7 4.2 13.8 5.9 14.5 8c-.4 1.1-1.1 2.1-2 2.9" />
+                </svg>
+              )}
+            </button>
+
+            {/* 3. Eliminar todas las secciones */}
             <button
               type="button"
               onClick={() => clearSections()}
-              disabled={!isEngineReady}
-              className="px-2 py-1.5 rounded text-xs font-medium text-pavasal-300 bg-asphalt-800 hover:bg-asphalt-700 hover:text-white disabled:opacity-40 transition-colors whitespace-nowrap shrink-0"
-              title="Eliminar planos de sección activos"
+              disabled={!isEngineReady || !isSectionActive}
+              aria-label="Eliminar todas las secciones"
+              className={`px-2 py-1 rounded text-xs transition-colors flex items-center gap-1 whitespace-nowrap disabled:opacity-40 ${
+                isSectionActive
+                  ? 'text-red-300 hover:bg-red-500/20 hover:text-red-100 font-medium'
+                  : 'text-asphalt-400 font-medium'
+              }`}
+              title={
+                isSectionActive
+                  ? 'Eliminar todas las secciones'
+                  : 'Eliminar todas las secciones (no hay secciones activas)'
+              }
             >
-              Quitar secciones
+              <svg
+                className="w-3.5 h-3.5 shrink-0"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M3 4.5h10M6.5 2.5h3M5 4.5v8.5a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1V4.5" />
+                <path d="M6.8 7v4.5M9.2 7v4.5" />
+              </svg>
             </button>
-          )}
+          </div>
 
           <div className="h-4 w-px bg-asphalt-700 mx-1 shrink-0" />
 
