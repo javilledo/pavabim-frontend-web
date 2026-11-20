@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
+import { useViewerStore } from '../../store/useViewerStore';
 import { useEngine } from '../../viewer/EngineContext';
 
 type CardinalDirection = 'N' | 'S' | 'E' | 'O';
@@ -123,7 +124,11 @@ function buildPieceLabel(ix: number, iy: number, iz: number): string {
   return parts.join(' / ');
 }
 
-function createFaceLabelTexture(text: string, hovered: boolean): THREE.CanvasTexture {
+function createFaceLabelTexture(
+  text: string,
+  hovered: boolean,
+  isLight: boolean
+): THREE.CanvasTexture {
   const size = 256;
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -131,14 +136,20 @@ function createFaceLabelTexture(text: string, hovered: boolean): THREE.CanvasTex
   const ctx = canvas.getContext('2d');
 
   if (ctx) {
-    ctx.fillStyle = hovered ? '#facc15' : '#272a30';
+    ctx.fillStyle = hovered ? '#facc15' : isLight ? '#d4dae3' : '#272a30';
     ctx.fillRect(0, 0, size, size);
 
-    ctx.strokeStyle = hovered ? '#fef08a' : '#4b5563';
+    ctx.strokeStyle = hovered
+      ? isLight
+        ? '#eab308'
+        : '#fef08a'
+      : isLight
+        ? '#94a3b8'
+        : '#4b5563';
     ctx.lineWidth = 8;
     ctx.strokeRect(4, 4, size - 8, size - 8);
 
-    ctx.fillStyle = hovered ? '#18191c' : '#e5e7eb';
+    ctx.fillStyle = hovered ? '#18191c' : isLight ? '#1e293b' : '#e5e7eb';
     ctx.font = '700 44px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -151,7 +162,7 @@ function createFaceLabelTexture(text: string, hovered: boolean): THREE.CanvasTex
   return texture;
 }
 
-function createCompassTexture(): THREE.CanvasTexture {
+function createCompassTexture(isLight: boolean): THREE.CanvasTexture {
   const size = 512;
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -165,14 +176,18 @@ function createCompassTexture(): THREE.CanvasTexture {
     ctx.clearRect(0, 0, size, size);
 
     // Outer subtle ring
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+    ctx.strokeStyle = isLight
+      ? 'rgba(71, 85, 105, 0.45)'
+      : 'rgba(148, 163, 184, 0.35)';
     ctx.lineWidth = 10;
     ctx.beginPath();
     ctx.arc(cx, cy, 206, 0, Math.PI * 2);
     ctx.stroke();
 
     // Tick marks around perimeter
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
+    ctx.strokeStyle = isLight
+      ? 'rgba(71, 85, 105, 0.32)'
+      : 'rgba(148, 163, 184, 0.25)';
     ctx.lineWidth = 3;
     for (let deg = 0; deg < 360; deg += 30) {
       const rad = (deg * Math.PI) / 180;
@@ -194,7 +209,8 @@ function createCompassTexture(): THREE.CanvasTexture {
 function createCardinalBadgeTexture(
   letter: CardinalDirection,
   isNorth: boolean,
-  hovered: boolean
+  hovered: boolean,
+  isLight: boolean
 ): THREE.CanvasTexture {
   const size = 128;
   const canvas = document.createElement('canvas');
@@ -209,16 +225,26 @@ function createCardinalBadgeTexture(
 
     ctx.clearRect(0, 0, size, size);
 
-    ctx.fillStyle = hovered ? '#facc15' : 'rgba(24, 25, 28, 0.92)';
+    ctx.fillStyle = hovered
+      ? '#facc15'
+      : isLight
+        ? 'rgba(226, 232, 240, 0.94)'
+        : 'rgba(24, 25, 28, 0.92)';
     ctx.beginPath();
     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.strokeStyle = hovered
-      ? '#fef08a'
+      ? isLight
+        ? '#ca8a04'
+        : '#fef08a'
       : isNorth
-        ? '#facc15'
-        : 'rgba(148, 163, 184, 0.72)';
+        ? isLight
+          ? '#ca8a04'
+          : '#facc15'
+        : isLight
+          ? 'rgba(100, 116, 139, 0.72)'
+          : 'rgba(148, 163, 184, 0.72)';
     ctx.lineWidth = isNorth || hovered ? 8 : 6;
     ctx.beginPath();
     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
@@ -227,7 +253,15 @@ function createCardinalBadgeTexture(
     ctx.font = '800 56px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = hovered ? '#18191c' : isNorth ? '#facc15' : '#e5e7eb';
+    ctx.fillStyle = hovered
+      ? '#18191c'
+      : isNorth
+        ? isLight
+          ? '#9a6b00'
+          : '#facc15'
+        : isLight
+          ? '#1e293b'
+          : '#e5e7eb';
     ctx.fillText(letter, cx, cy + 3);
   }
 
@@ -239,6 +273,7 @@ function createCardinalBadgeTexture(
 
 export const ViewCubeGizmo: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const themeMode = useViewerStore((state) => state.themeMode);
   const {
     isEngineReady,
     world,
@@ -285,21 +320,22 @@ export const ViewCubeGizmo: React.FC = () => {
     const cubeGroup = new THREE.Group();
     scene.add(cubeGroup);
 
+    const isLight = themeMode === 'light';
     const pickMeshes: THREE.Mesh[] = [];
     const disposables: Array<{ dispose: () => void }> = [];
 
     const matEdgeNormal = new THREE.MeshStandardMaterial({
-      color: 0x32363f,
+      color: isLight ? 0xc2cad6 : 0x32363f,
       roughness: 0.75,
       metalness: 0.1,
     });
     const matCornerNormal = new THREE.MeshStandardMaterial({
-      color: 0x3b404b,
+      color: isLight ? 0xb4becc : 0x3b404b,
       roughness: 0.7,
       metalness: 0.12,
     });
     const matFaceBaseNormal = new THREE.MeshStandardMaterial({
-      color: 0x272a30,
+      color: isLight ? 0xd4dae3 : 0x272a30,
       roughness: 0.8,
       metalness: 0.05,
     });
@@ -320,8 +356,8 @@ export const ViewCubeGizmo: React.FC = () => {
 
     for (let idx = 0; idx < FACES.length; idx++) {
       const face = FACES[idx];
-      const texNormal = createFaceLabelTexture(face.shortLabel, false);
-      const texHover = createFaceLabelTexture(face.shortLabel, true);
+      const texNormal = createFaceLabelTexture(face.shortLabel, false, isLight);
+      const texHover = createFaceLabelTexture(face.shortLabel, true, isLight);
       const normalMat = new THREE.MeshBasicMaterial({ map: texNormal });
       const hoverMat = new THREE.MeshBasicMaterial({ map: texHover });
       const geo = new THREE.PlaneGeometry(CENTER_SPAN, CENTER_SPAN);
@@ -389,7 +425,7 @@ export const ViewCubeGizmo: React.FC = () => {
     const outerBoxGeo = new THREE.BoxGeometry(CUBE_HALF * 2, CUBE_HALF * 2, CUBE_HALF * 2);
     const outerEdgesGeo = new THREE.EdgesGeometry(outerBoxGeo);
     const outerEdgesMat = new THREE.LineBasicMaterial({
-      color: 0x94a3b8,
+      color: isLight ? 0x64748b : 0x94a3b8,
       transparent: true,
       opacity: 0.75,
     });
@@ -426,9 +462,9 @@ export const ViewCubeGizmo: React.FC = () => {
     const gridGeo = new THREE.BufferGeometry();
     gridGeo.setAttribute('position', new THREE.Float32BufferAttribute(gridVerts, 3));
     const gridMat = new THREE.LineBasicMaterial({
-      color: 0x64748b,
+      color: isLight ? 0x94a3b8 : 0x64748b,
       transparent: true,
-      opacity: 0.48,
+      opacity: isLight ? 0.65 : 0.48,
     });
     const gridLines = new THREE.LineSegments(gridGeo, gridMat);
     gridLines.raycast = () => {};
@@ -436,7 +472,7 @@ export const ViewCubeGizmo: React.FC = () => {
     disposables.push(gridGeo, gridMat);
 
     // Compass ring at base (non-raycastable background ring)
-    const compassTex = createCompassTexture();
+    const compassTex = createCompassTexture(isLight);
     const compassMat = new THREE.MeshBasicMaterial({
       map: compassTex,
       transparent: true,
@@ -460,12 +496,14 @@ export const ViewCubeGizmo: React.FC = () => {
       const texNormal = createCardinalBadgeTexture(
         cfg.cardinal,
         Boolean(cfg.isNorth),
-        false
+        false,
+        isLight
       );
       const texHover = createCardinalBadgeTexture(
         cfg.cardinal,
         Boolean(cfg.isNorth),
-        true
+        true,
+        isLight
       );
       const normalMat = new THREE.MeshBasicMaterial({
         map: texNormal,
@@ -679,7 +717,7 @@ export const ViewCubeGizmo: React.FC = () => {
       }
       renderer.dispose();
     };
-  }, [isEngineReady, world]);
+  }, [isEngineReady, world, themeMode]);
 
   if (!isEngineReady) return null;
 
@@ -690,7 +728,11 @@ export const ViewCubeGizmo: React.FC = () => {
         width={GIZMO_SIZE_PX}
         height={GIZMO_SIZE_PX}
         onContextMenu={(e) => e.preventDefault()}
-        className="w-full h-full pointer-events-auto cursor-pointer drop-shadow-[0_4px_12px_rgba(0,0,0,0.55)]"
+        className={`w-full h-full pointer-events-auto cursor-pointer ${
+          themeMode === 'light'
+            ? 'drop-shadow-[0_4px_12px_rgba(15,23,42,0.28)]'
+            : 'drop-shadow-[0_4px_12px_rgba(0,0,0,0.55)]'
+        }`}
       />
     </div>
   );

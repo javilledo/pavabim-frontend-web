@@ -249,6 +249,7 @@ function createMeasureBadgeEntry(
   containerDiv.appendChild(primaryDiv);
 
   const subDiv = document.createElement('div');
+  subDiv.className = 'pavabim-measure-badge-sub';
   subDiv.style.fontSize = '10px';
   subDiv.style.fontWeight = '500';
   subDiv.style.color = '#cbd5e1';
@@ -979,11 +980,26 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setSectionGizmosVisible: setStoreSectionGizmosVisible,
     setActiveTool: setStoreActiveTool,
     setCameraProjection: setStoreCameraProjection,
+    themeMode,
     currentProjectId,
   } = useViewerStore();
 
   const activeToolRef = useRef(activeTool);
   activeToolRef.current = activeTool;
+
+  useEffect(() => {
+    if (!isEngineReady || !worldRef.current) return;
+    const isLight = themeMode === 'light';
+    worldRef.current.scene.three.background = new THREE.Color(
+      isLight ? 0xe2e6ed : 0x18191c
+    );
+    if (gridRef.current) {
+      gridRef.current.config.color = new THREE.Color(
+        isLight ? 0x8b95a7 : 0x666666
+      );
+    }
+    worldRef.current.renderer?.update();
+  }, [isEngineReady, themeMode]);
 
   const initEngine = useCallback(
     async (container: HTMLDivElement) => {
@@ -1050,8 +1066,12 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         };
         world.camera.controls.addEventListener('update', syncCameraNearPlane);
 
+        const initialThemeLight =
+          useViewerStore.getState().themeMode === 'light';
         world.scene.setup({
-          backgroundColor: new THREE.Color(0x18191c), // Dark charcoal / slate viewport background
+          backgroundColor: new THREE.Color(
+            initialThemeLight ? 0xe2e6ed : 0x18191c
+          ),
         });
 
         // Initial camera position
@@ -1064,6 +1084,9 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         // Grid setup
         const grids = components.get(OBC.Grids);
         const grid = grids.create(world);
+        grid.config.color = new THREE.Color(
+          initialThemeLight ? 0x8b95a7 : 0x666666
+        );
         gridRef.current = grid;
 
         // Fragments Manager setup

@@ -11,6 +11,27 @@ export type ActiveTool =
   | 'coordinates';
 export type MeasureMode = 'length' | 'area' | 'volume' | 'coordinates';
 export type CameraProjectionMode = 'Perspective' | 'Orthographic';
+export type ThemeMode = 'dark' | 'light';
+
+export function getSystemThemeMode(): ThemeMode {
+  if (
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-color-scheme: light)').matches
+  ) {
+    return 'light';
+  }
+  return 'dark';
+}
+
+export function applyThemeToDocument(theme: ThemeMode): void {
+  if (typeof document !== 'undefined') {
+    document.documentElement.setAttribute('data-theme', theme);
+  }
+}
+
+const initialThemeMode = getSystemThemeMode();
+applyThemeToDocument(initialThemeMode);
 
 export interface LoadedModel {
   id: string;
@@ -62,6 +83,7 @@ interface ViewerState {
   isGridVisible: boolean;
   isSectionActive: boolean;
   isSectionGizmosVisible: boolean;
+  themeMode: ThemeMode;
 
   // 3D Loaded Models & Standalone Loading State
   loadedModels: LoadedModel[];
@@ -91,6 +113,8 @@ interface ViewerState {
   toggleSection: () => void;
   setSectionActive: (active: boolean) => void;
   setSectionGizmosVisible: (visible: boolean) => void;
+  setThemeMode: (theme: ThemeMode) => void;
+  toggleThemeMode: () => void;
   setModelLoading: (loading: boolean, modelName?: string | null) => void;
   setViewerToastError: (error: string | null) => void;
   addLoadedModel: (model: LoadedModel) => void;
@@ -132,6 +156,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   isGridVisible: true,
   isSectionActive: false,
   isSectionGizmosVisible: true,
+  themeMode: initialThemeMode,
 
   loadedModels: [],
   isLoadingModel: false,
@@ -166,6 +191,18 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
 
   setSectionGizmosVisible: (isSectionGizmosVisible) =>
     set({ isSectionGizmosVisible }),
+
+  setThemeMode: (themeMode) => {
+    applyThemeToDocument(themeMode);
+    set({ themeMode });
+  },
+
+  toggleThemeMode: () =>
+    set((state) => {
+      const nextTheme: ThemeMode = state.themeMode === 'dark' ? 'light' : 'dark';
+      applyThemeToDocument(nextTheme);
+      return { themeMode: nextTheme };
+    }),
 
   setModelLoading: (isLoadingModel, loadingModelName = null) =>
     set({ isLoadingModel, loadingModelName }),

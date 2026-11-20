@@ -49,6 +49,7 @@ export const RibbonToolbar: React.FC = () => {
     isGridVisible,
     isSectionActive,
     isSectionGizmosVisible,
+    themeMode,
     loadedModels,
     selectedElementsMap,
     hiddenElementsMap,
@@ -57,6 +58,7 @@ export const RibbonToolbar: React.FC = () => {
     currentProject,
     setActiveTool,
     setMeasureMode,
+    toggleThemeMode,
     setProjects,
     setCurrentProjectById,
     resetProjectContext,
@@ -763,6 +765,51 @@ export const RibbonToolbar: React.FC = () => {
                   </span>
                 </div>
               </div>
+
+              <button
+                type="button"
+                onClick={toggleThemeMode}
+                className="p-1.5 rounded border border-asphalt-700 bg-asphalt-800 text-asphalt-200 hover:border-pavasal-500/60 hover:text-pavasal-400 transition-colors"
+                title={
+                  themeMode === 'dark'
+                    ? 'Cambiar a modo claro'
+                    : 'Cambiar a modo oscuro'
+                }
+                aria-label={
+                  themeMode === 'dark'
+                    ? 'Cambiar a modo claro'
+                    : 'Cambiar a modo oscuro'
+                }
+              >
+                {themeMode === 'dark' ? (
+                  <svg
+                    className="w-4 h-4"
+                    viewBox="0 0 20 20"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <circle cx="10" cy="10" r="3.6" />
+                    <path d="M10 2.5v1.8M10 15.7v1.8M2.5 10h1.8M15.7 10h1.8M4.7 4.7l1.3 1.3M14 14l1.3 1.3M15.3 4.7L14 6M6 14l-1.3 1.3" />
+                  </svg>
+                ) : (
+                  <svg
+                    className="w-4 h-4"
+                    viewBox="0 0 20 20"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M16.2 12.6A6.5 6.5 0 0 1 7.4 3.8a6.8 6.8 0 1 0 8.8 8.8Z" />
+                  </svg>
+                )}
+              </button>
 
               {canShowAdminGear && (
                 <div ref={adminMenuRef} className="relative">

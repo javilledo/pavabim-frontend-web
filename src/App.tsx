@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './auth/AuthProvider';
 import { LoginScreen } from './components/auth/LoginScreen';
 import { MainLayout } from './components/layout/MainLayout';
+import { applyThemeToDocument, useViewerStore } from './store/useViewerStore';
 import { EngineProvider } from './viewer/EngineContext';
 
 const queryClient = new QueryClient({
@@ -16,6 +17,29 @@ const queryClient = new QueryClient({
 
 const AppContent: React.FC = () => {
   const { user, loading } = useAuth();
+  const themeMode = useViewerStore((state) => state.themeMode);
+  const setThemeMode = useViewerStore((state) => state.setThemeMode);
+
+  useEffect(() => {
+    applyThemeToDocument(themeMode);
+  }, [themeMode]);
+
+  useEffect(() => {
+    if (
+      typeof window === 'undefined' ||
+      typeof window.matchMedia !== 'function'
+    ) {
+      return;
+    }
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
+    setThemeMode(mediaQuery.matches ? 'light' : 'dark');
+
+    const handleChange = (event: MediaQueryListEvent) => {
+      setThemeMode(event.matches ? 'light' : 'dark');
+    };
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, [setThemeMode]);
 
   if (loading) {
     return (

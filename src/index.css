@@ -3,11 +3,41 @@
 @tailwind utilities;
 
 :root {
+  color-scheme: dark;
   --pavasal-yellow: #ffc72c;
   --pavasal-yellow-hover: #ffd653;
   --pavasal-black: #121212;
   --pavasal-surface: #1e1e1e;
   --pavasal-border: #34373f;
+  --asphalt-50: 245 245 246;
+  --asphalt-100: 229 230 232;
+  --asphalt-200: 204 205 210;
+  --asphalt-300: 165 167 176;
+  --asphalt-400: 125 128 138;
+  --asphalt-500: 93 96 105;
+  --asphalt-600: 71 74 82;
+  --asphalt-700: 52 55 63;
+  --asphalt-800: 38 40 46;
+  --asphalt-900: 30 30 30;
+  --asphalt-950: 18 18 18;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --pavasal-black: #e2e6ed;
+  --pavasal-surface: #edf0f5;
+  --pavasal-border: #bec6d2;
+  --asphalt-50: 18 21 28;
+  --asphalt-100: 29 34 43;
+  --asphalt-200: 42 48 60;
+  --asphalt-300: 60 67 82;
+  --asphalt-400: 82 90 107;
+  --asphalt-500: 105 114 130;
+  --asphalt-600: 163 173 188;
+  --asphalt-700: 190 198 210;
+  --asphalt-800: 217 222 231;
+  --asphalt-900: 237 240 245;
+  --asphalt-950: 226 230 237;
 }
 
 html,
@@ -19,28 +49,102 @@ body,
   padding: 0;
   overflow: hidden;
   user-select: none;
-  background-color: var(--pavasal-black);
-  color: #f5f5f6;
+  background-color: rgb(var(--asphalt-950));
+  color: rgb(var(--asphalt-50));
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
 ::selection {
   background-color: var(--pavasal-yellow);
-  color: var(--pavasal-black);
+  color: #121212;
 }
 
-/* Custom sleek industrial dark scrollbars */
+/* Light theme readability & soft-toned semantic overrides (never pure white) */
+:root[data-theme='light'] .bg-pavasal-500,
+:root[data-theme='light'] .bg-pavasal-400,
+:root[data-theme='light'] .hover\:bg-pavasal-500:hover,
+:root[data-theme='light'] .hover\:bg-pavasal-400:hover {
+  color: #12151c;
+}
+
+:root[data-theme='light'] .text-white:not(.bg-red-500):not(.bg-red-600):not(.bg-emerald-600),
+:root[data-theme='light'] .hover\:text-white:hover:not(.hover\:bg-red-500) {
+  color: rgb(var(--asphalt-50));
+}
+
+:root[data-theme='light'] .text-pavasal-400,
+:root[data-theme='light'] .text-pavasal-300 {
+  color: #9a6b00;
+}
+
+:root[data-theme='light'] .hover\:text-pavasal-400:hover:not(.bg-pavasal-500):not(.hover\:bg-pavasal-500),
+:root[data-theme='light'] .hover\:text-pavasal-300:hover:not(.bg-pavasal-500):not(.hover\:bg-pavasal-500) {
+  color: #855b00;
+}
+
+:root[data-theme='light'] .bg-red-950\/60,
+:root[data-theme='light'] .bg-red-950\/70,
+:root[data-theme='light'] .bg-red-950\/95,
+:root[data-theme='light'] .hover\:bg-red-950\/70:hover {
+  background-color: rgba(254, 226, 226, 0.9);
+}
+
+:root[data-theme='light'] .bg-emerald-950\/40,
+:root[data-theme='light'] .bg-emerald-950\/60,
+:root[data-theme='light'] .bg-emerald-950\/70 {
+  background-color: rgba(209, 250, 229, 0.85);
+}
+
+:root[data-theme='light'] .bg-pavasal-950\/80 {
+  background-color: rgba(254, 243, 199, 0.82);
+}
+
+:root[data-theme='light'] .bg-pavasal-950\/35 {
+  background-color: rgba(254, 243, 199, 0.45);
+}
+
+:root[data-theme='light'] .text-red-100,
+:root[data-theme='light'] .text-red-200,
+:root[data-theme='light'] .text-red-300,
+:root[data-theme='light'] .text-red-400,
+:root[data-theme='light'] .hover\:text-red-300:hover,
+:root[data-theme='light'] .hover\:text-red-100:hover {
+  color: #991b1b;
+}
+
+:root[data-theme='light'] .text-emerald-200,
+:root[data-theme='light'] .text-emerald-300,
+:root[data-theme='light'] .text-emerald-400 {
+  color: #065f46;
+}
+
+:root[data-theme='light'] .text-sky-300,
+:root[data-theme='light'] .text-sky-400 {
+  color: #0369a1;
+}
+
+:root[data-theme='light'] .pavabim-measure-badge {
+  background: rgba(237, 240, 245, 0.94) !important;
+  color: #12151c !important;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.16) !important;
+}
+
+:root[data-theme='light'] .pavabim-measure-badge-sub {
+  color: #475569 !important;
+}
+
+/* Custom sleek scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #121212;
+  background: rgb(var(--asphalt-950));
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #34373f;
+  background: rgb(var(--asphalt-700));
   border-radius: 3px;
 }
 
