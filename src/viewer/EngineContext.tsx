@@ -93,6 +93,7 @@ export interface EngineContextValue {
   focusElements: (modelId: string, localIds: number[], zoomToSelection?: boolean) => Promise<void>;
   focusSelectionMap: (selectionByModel: Record<string, number[]>, zoomToSelection?: boolean) => Promise<void>;
   toggleSelectionMap: (selectionByModel: Record<string, number[]>, zoomToSelection?: boolean) => Promise<void>;
+  selectModelElements: (modelId: string, additive?: boolean) => Promise<void>;
   selectElementsInScreenRect: (
     startClientX: number,
     startClientY: number,
@@ -1378,6 +1379,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           }
 
           const elementStr = String(primaryExpressId);
+          setSelectedElements(normalizedMap, elementStr, primaryModelId, null);
           let props: Record<string, any> | null = null;
           try {
             const allItems: Record<string, unknown>[] = [];
@@ -2325,6 +2327,43 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       await highlighter.highlightByID('select', nextMap, true, zoomToSelection);
     },
     [setSelectedElements]
+  );
+
+  const selectModelElements = useCallback(
+    async (modelId: string, additive = false) => {
+      const fragments = fragmentsRef.current;
+      const highlighter = highlighterRef.current;
+      if (!fragments || !highlighter || !fragments.initialized) return;
+
+      const model = fragments.list.get(modelId);
+      if (!model || !model.object.visible) return;
+
+      let localIds = await model
+        .getItemsIdsWithGeometry()
+        .catch(() => [] as number[]);
+      if (!localIds || localIds.length === 0) {
+        localIds = await model.getLocalIds().catch(() => [] as number[]);
+      }
+
+      const hiddenIds = useViewerStore.getState().hiddenElementsMap[modelId];
+      if (hiddenIds && hiddenIds.length > 0) {
+        const hiddenSet = new Set(hiddenIds);
+        const visibleIds = localIds.filter((id) => !hiddenSet.has(id));
+        if (visibleIds.length > 0) {
+          localIds = visibleIds;
+        }
+      }
+
+      if (!localIds || localIds.length === 0) return;
+
+      if (additive) {
+        await toggleSelectionMap({ [modelId]: localIds }, false);
+      } else {
+        await focusSelectionMap({ [modelId]: localIds }, false);
+      }
+      await fragments.core.update(true);
+    },
+    [focusSelectionMap, toggleSelectionMap]
   );
 
   const selectElementsInScreenRect = useCallback(
@@ -4427,6 +4466,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         focusElements,
         focusSelectionMap,
         toggleSelectionMap,
+        selectModelElements,
         selectElementsInScreenRect,
         clearSelection,
         hideSelectedElements,

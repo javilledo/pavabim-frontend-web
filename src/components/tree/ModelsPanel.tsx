@@ -6,7 +6,7 @@ import { projectsService } from '../../api/projects.service';
 import { useAuth } from '../../auth/AuthProvider';
 import { useProjectModelsQuery } from '../../hooks/useAutoConvertProjectModels';
 import { useProjectRole } from '../../hooks/useProjectRole';
-import { useViewerStore } from '../../store/useViewerStore';
+import { useViewerStore, type LoadedModel } from '../../store/useViewerStore';
 import type { ModelStatusResponse } from '../../types/api.types';
 import { useEngine } from '../../viewer/EngineContext';
 
@@ -30,13 +30,19 @@ export const ModelsPanel: React.FC = () => {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const { canManageModels, canSyncDrive } = useProjectRole();
-  const { loadedModels, currentProject, setRemoteModels } = useViewerStore();
+  const {
+    loadedModels,
+    currentProject,
+    selectedElementsMap,
+    setRemoteModels,
+  } = useViewerStore();
   const {
     isEngineReady,
     loadModelFromBuffer,
     toggleModelVisibility,
     removeModel,
     fitCameraToModels,
+    selectModelElements,
   } = useEngine();
 
   const [loadingModelKey, setLoadingModelKey] = useState<string | null>(null);
@@ -124,7 +130,192 @@ export const ModelsPanel: React.FC = () => {
     );
   }, [modelsQuery.data]);
 
+  const localLoadedModels = useMemo(
+    () => loadedModels.filter((m) => !m.projectId),
+    [loadedModels],
+  );
+
+  const renderLocalModelCard = (localModel: LoadedModel) => {
+    const canSelect = isEngineReady && localModel.visible;
+    const selectedCountForModel = selectedElementsMap[localModel.id]?.length ?? 0;
+    const isModelSelected = selectedCountForModel > 0;
+
+    return (
+      <div
+        key={localModel.id}
+        role={canSelect ? 'button' : undefined}
+        tabIndex={canSelect ? 0 : undefined}
+        onClick={
+          canSelect
+            ? (e) => void selectModelElements(localModel.id, e.ctrlKey || e.metaKey)
+            : undefined
+        }
+        onKeyDown={
+          canSelect
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  void selectModelElements(
+                    localModel.id,
+                    e.ctrlKey || e.metaKey,
+                  );
+                }
+              }
+            : undefined
+        }
+        title={
+          canSelect
+            ? 'Clic para seleccionar todos los elementos del modelo · Ctrl + clic para sumar/alternar'
+            : undefined
+        }
+        className={`rounded border px-2 py-1.5 transition-colors ${
+          isModelSelected
+            ? 'border-pavasal-500/70 bg-pavasal-500/15'
+            : canSelect
+              ? 'border-asphalt-700/80 bg-asphalt-800/60 hover:border-pavasal-500/50 hover:bg-asphalt-800'
+              : 'border-asphalt-700/80 bg-asphalt-800/60'
+        } ${canSelect ? 'cursor-pointer' : ''}`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 min-w-0 flex-1">
+            <span
+              className={`w-2 h-2 rounded-full shrink-0 ${
+                localModel.visible ? 'bg-emerald-400' : 'bg-asphalt-400'
+              }`}
+              title={
+                localModel.visible
+                  ? 'Modelo visible en escena'
+                  : 'Modelo oculto en escena'
+              }
+            />
+            <span
+              className={`truncate text-[11px] font-medium ${
+                localModel.visible ? 'text-asphalt-100' : 'text-asphalt-400'
+              }`}
+              title={localModel.name}
+            >
+              {localModel.name}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              disabled={!isEngineReady}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleModelVisibility(localModel.id, !localModel.visible);
+              }}
+              aria-label={
+                localModel.visible
+                  ? `Ocultar ${localModel.name}`
+                  : `Mostrar ${localModel.name}`
+              }
+              title={
+                localModel.visible ? 'Ocultar en escena' : 'Mostrar en escena'
+              }
+              className={`p-1 rounded border transition-colors ${
+                localModel.visible
+                  ? 'border-asphalt-600 bg-asphalt-900 text-asphalt-100 hover:border-pavasal-500/60 hover:text-pavasal-400'
+                  : 'border-asphalt-700 bg-asphalt-950 text-asphalt-400 hover:border-pavasal-500/60 hover:text-white'
+              }`}
+            >
+              {!localModel.visible ? (
+                <svg
+                  className="w-3.5 h-3.5"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M2 2l12 12M6.6 6.7A2 2 0 009.3 9.4M4.3 4.5C2.9 5.4 1.9 6.7 1.5 8c1.1 2.7 3.6 4.5 6.5 4.5 1.1 0 2.1-.3 3-.7M7 3.6c.3 0 .7-.1 1-.1 2.9 0 5.4 1.8 6.5 4.5-.4 1-1.1 1.9-1.9 2.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              ) : (
+                <svg
+                  className="w-3.5 h-3.5"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M1.5 8C2.6 5.3 5.1 3.5 8 3.5S13.4 5.3 14.5 8c-1.1 2.7-3.6 4.5-6.5 4.5S2.6 10.7 1.5 8Z"
+                    strokeLinejoin="round"
+                  />
+                  <circle cx="8" cy="8" r="2" />
+                </svg>
+              )}
+            </button>
+
+            <button
+              type="button"
+              disabled={!isEngineReady}
+              onClick={(e) => {
+                e.stopPropagation();
+                void removeModel(localModel.id);
+              }}
+              aria-label={`Descargar ${localModel.name} del visor 3D`}
+              title="Descargar del visor 3D"
+              className="group p-1 rounded border transition-colors border-emerald-600/60 bg-emerald-950/70 text-emerald-300 hover:border-red-500/70 hover:bg-red-950/70 hover:text-red-300"
+            >
+              <svg
+                className="w-3.5 h-3.5 group-hover:hidden"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                aria-hidden="true"
+              >
+                <path
+                  d="M3.5 8.5l3 3 6-6.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <svg
+                className="w-3.5 h-3.5 hidden group-hover:block"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                aria-hidden="true"
+              >
+                <path
+                  d="M4 4l8 8M12 4l-8 8"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   if (!user || !currentProject) {
+    if (localLoadedModels.length > 0) {
+      return (
+        <div className="space-y-2.5 text-xs">
+          <div className="flex items-center justify-between gap-2 pb-1 border-b border-asphalt-800">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-pavasal-400 truncate">
+              Visor local ({localLoadedModels.length})
+            </h3>
+          </div>
+          <div className="space-y-1">
+            {localLoadedModels.map((localModel) =>
+              renderLocalModelCard(localModel),
+            )}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="rounded border border-asphalt-800 bg-asphalt-950/50 p-3 text-center text-[11px] text-asphalt-400 leading-relaxed">
         Selecciona un proyecto en la barra superior para ver los modelos de su
@@ -350,10 +541,50 @@ export const ModelsPanel: React.FC = () => {
                   ? 'Convierte primero el IFC a .frag para cargarlo'
                   : 'Cargar modelo en el visor 3D';
 
+            const canSelectModel = Boolean(loadedModel && isVisible);
+            const isModelSelected = Boolean(
+              loadedModel && (selectedElementsMap[loadedModel.id]?.length ?? 0) > 0,
+            );
+
             return (
               <div
                 key={targetId}
-                className="rounded border border-asphalt-700/80 bg-asphalt-800/60 px-2 py-1.5 space-y-1"
+                role={canSelectModel ? 'button' : undefined}
+                tabIndex={canSelectModel ? 0 : undefined}
+                onClick={
+                  canSelectModel && loadedModel
+                    ? (e) =>
+                        void selectModelElements(
+                          loadedModel.id,
+                          e.ctrlKey || e.metaKey,
+                        )
+                    : undefined
+                }
+                onKeyDown={
+                  canSelectModel && loadedModel
+                    ? (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          void selectModelElements(
+                            loadedModel.id,
+                            e.ctrlKey || e.metaKey,
+                          );
+                        }
+                      }
+                    : undefined
+                }
+                title={
+                  canSelectModel
+                    ? 'Clic para seleccionar todos los elementos del modelo · Ctrl + clic para sumar/alternar'
+                    : undefined
+                }
+                className={`rounded border px-2 py-1.5 space-y-1 transition-colors ${
+                  isModelSelected
+                    ? 'border-pavasal-500/70 bg-pavasal-500/15'
+                    : canSelectModel
+                      ? 'border-asphalt-700/80 bg-asphalt-800/60 hover:border-pavasal-500/50 hover:bg-asphalt-800'
+                      : 'border-asphalt-700/80 bg-asphalt-800/60'
+                } ${canSelectModel ? 'cursor-pointer' : ''}`}
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-1.5 min-w-0 flex-1">
@@ -378,10 +609,12 @@ export const ModelsPanel: React.FC = () => {
                     <button
                       type="button"
                       disabled={!loadedModel}
-                      onClick={() =>
-                        loadedModel &&
-                        toggleModelVisibility(loadedModel.id, !isVisible)
-                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (loadedModel) {
+                          toggleModelVisibility(loadedModel.id, !isVisible);
+                        }
+                      }}
                       aria-label={
                         !loadedModel
                           ? 'Modelo no cargado'
@@ -441,12 +674,13 @@ export const ModelsPanel: React.FC = () => {
                     <button
                       type="button"
                       disabled={!canConvert}
-                      onClick={() =>
+                      onClick={(e) => {
+                        e.stopPropagation();
                         convertMutation.mutate({
                           modelName: model.modelName,
                           force: model.status === 'READY' || isOutdated,
-                        })
-                      }
+                        });
+                      }}
                       aria-label={
                         model.status === 'READY'
                           ? `Forzar reconversión de ${model.modelName} de IFC a FRAG`
@@ -503,11 +737,14 @@ export const ModelsPanel: React.FC = () => {
                     <button
                       type="button"
                       disabled={!canLoadOrUnload}
-                      onClick={() =>
-                        loadedModel
-                          ? void removeModel(loadedModel.id)
-                          : void handleLoadRemoteModel(model)
-                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (loadedModel) {
+                          void removeModel(loadedModel.id);
+                        } else {
+                          void handleLoadRemoteModel(model);
+                        }
+                      }}
                       aria-label={
                         isLoaded
                           ? `Descargar ${model.modelName} del visor 3D`
@@ -599,6 +836,19 @@ export const ModelsPanel: React.FC = () => {
               </div>
             );
           })}
+          </div>
+        </div>
+      )}
+
+      {localLoadedModels.length > 0 && (
+        <div className="space-y-1.5 pt-2 border-t border-asphalt-800">
+          <h4 className="text-[10px] font-semibold uppercase tracking-wider text-asphalt-400">
+            Modelos locales ({localLoadedModels.length})
+          </h4>
+          <div className="space-y-1">
+            {localLoadedModels.map((localModel) =>
+              renderLocalModelCard(localModel),
+            )}
           </div>
         </div>
       )}
