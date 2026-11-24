@@ -1,7 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type * as FRAGS from '@thatopen/fragments';
 import { useViewerStore } from '../../store/useViewerStore';
+import {
+  createEmptyFilterCondition,
+  DEFAULT_TYPE_LABEL,
+  evaluateElementAgainstConditions,
+  getOrBuildModelParameterIndex,
+  mergeModelParameterIndexes,
+  type FilterCondition,
+  type ModelParameterIndex,
+} from '../../utils/elementParameterFilter';
 import { useEngine } from '../../viewer/EngineContext';
+import { ParameterFilterBuilder } from './ParameterFilterBuilder';
 
 interface ElementItemEntry {
   modelId: string;
@@ -38,7 +48,6 @@ interface TreeContextMenuState {
 
 const DATA_CHUNK_SIZE = 400;
 const INITIAL_VISIBLE_ITEMS = 200;
-const DEFAULT_TYPE_LABEL = 'Sin tipo definido';
 const CONTEXT_MENU_WIDTH = 176;
 const CONTEXT_MENU_HEIGHT = 44;
 
@@ -126,8 +135,13 @@ export const ElementsTreePanel: React.FC = () => {
     hiddenElementsMap,
     currentProjectId,
   } = useViewerStore();
-  const { fragments, focusElement, focusSelectionMap, toggleSelectionMap } =
-    useEngine();
+  const {
+    fragments,
+    focusElement,
+    focusSelectionMap,
+    toggleSelectionMap,
+    clearSelection,
+  } = useEngine();
 
   const selectedElementKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -187,6 +201,16 @@ export const ElementsTreePanel: React.FC = () => {
   const [activeGroupKey, setActiveGroupKey] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<TreeContextMenuState | null>(
     null,
+  );
+
+  // Parameter Filter state
+  const [modelIndexes, setModelIndexes] = useState<ModelParameterIndex[]>([]);
+  const [isIndexingParams, setIsIndexingParams] = useState(false);
+  const [draftConditions, setDraftConditions] = useState<FilterCondition[]>(
+    () => [createEmptyFilterCondition()],
+  );
+  const [appliedConditions, setAppliedConditions] = useState<FilterCondition[]>(
+    [],
   );
 
   useEffect(() => {
@@ -335,6 +359,242 @@ export const ElementsTreePanel: React.FC = () => {
       active = false;
     };
   }, [fragments, visibleModelsKey]);
+
+  useEffect(() => {
+    let active = true;
+
+    if (
+      !fragments ||
+      !fragments.initialized ||
+      visibleModels.length === 0 ||
+      entities.length === 0
+    ) {
+      setModelIndexes([]);
+      setIsIndexingParams(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    const buildIndexes = async () => {
+      setIsIndexingParams(true);
+      try {
+        const bucketsByModel = new Map<
+          string,
+          {
+            modelName: string;
+            buckets: Array<{ category: string; localIds: number[] }>;
+          }
+        >();
+
+        for (const entity of entities) {
+          for (const bucket of entity.buckets) {
+            let modelEntry = bucketsByModel.get(bucket.modelId);
+            if (!modelEntry) {
+              modelEntry = { modelName: bucket.modelName, buckets: [] };
+              bucketsByModel.set(bucket.modelId, modelEntry);
+            }
+            modelEntry.buckets.push({
+              category: entity.category,
+              localIds: bucket.localIds,
+            });
+          }
+        }
+
+        const results: ModelParameterIndex[] = [];
+        for (const info of visibleModels) {
+          if (!active) return;
+          const model = fragments.list.get(info.id);
+          const modelEntry = bucketsByModel.get(info.id);
+          if (!model || !modelEntry || modelEntry.buckets.length === 0) {
+            continue;
+          }
+          const index = await getOrBuildModelParameterIndex(
+            model,
+            info.id,
+            info.name,
+            modelEntry.buckets,
+          );
+          results.push(index);
+        }
+
+        if (active) {
+          setModelIndexes(results);
+        }
+      } catch (err) {
+        console.warn(
+          '[ElementsTreePanel] Could not index model parameters:',
+          err,
+        );
+      } finally {
+        if (active) {
+          setIsIndexingParams(false);
+        }
+      }
+    };
+
+    void buildIndexes();
+
+    return () => {
+      active = false;
+    };
+  }, [entities, fragments, visibleModels]);
+
+  const availableParameters = useMemo(
+    () => mergeModelParameterIndexes(modelIndexes),
+    [modelIndexes],
+  );
+
+  const parameterFilteredTree = useMemo(() => {
+    if (appliedConditions.length === 0) {
+      return null;
+    }
+
+    const matchedByCategory = new Map<
+      string,
+      {
+        byModel: Map<string, { modelName: string; localIds: number[] }>;
+        byType: Map<string, ElementItemEntry[]>;
+      }
+    >();
+    const matchingSelectionByModel: Record<string, number[]> = {};
+    let totalMatched = 0;
+
+    for (const idx of modelIndexes) {
+      for (const el of idx.elements) {
+        if (!evaluateElementAgainstConditions(el, appliedConditions)) {
+          continue;
+        }
+        totalMatched += 1;
+
+        if (!matchingSelectionByModel[el.modelId]) {
+          matchingSelectionByModel[el.modelId] = [el.localId];
+        } else {
+          matchingSelectionByModel[el.modelId].push(el.localId);
+        }
+
+        let catGroup = matchedByCategory.get(el.category);
+        if (!catGroup) {
+          catGroup = {
+            byModel: new Map(),
+            byType: new Map(),
+          };
+          matchedByCategory.set(el.category, catGroup);
+        }
+
+        let modelBucket = catGroup.byModel.get(el.modelId);
+        if (!modelBucket) {
+          modelBucket = { modelName: el.modelName, localIds: [] };
+          catGroup.byModel.set(el.modelId, modelBucket);
+        }
+        modelBucket.localIds.push(el.localId);
+
+        const entry: ElementItemEntry = {
+          modelId: el.modelId,
+          modelName: el.modelName,
+          localId: el.localId,
+          name: el.name,
+        };
+        const typeList = catGroup.byType.get(el.typeName);
+        if (typeList) {
+          typeList.push(entry);
+        } else {
+          catGroup.byType.set(el.typeName, [entry]);
+        }
+      }
+    }
+
+    const nextEntities: AggregatedEntityGroup[] = [];
+    const nextTypeGroups: Record<string, TypeGroup[]> = {};
+
+    const sortedCategories = Array.from(matchedByCategory.keys()).sort((a, b) =>
+      a.localeCompare(b),
+    );
+
+    for (const category of sortedCategories) {
+      const catGroup = matchedByCategory.get(category)!;
+      const buckets: ModelCategoryBucket[] = [];
+      const selectionByModel: Record<string, number[]> = {};
+      let totalCount = 0;
+
+      for (const [modelId, b] of catGroup.byModel.entries()) {
+        buckets.push({
+          modelId,
+          modelName: b.modelName,
+          localIds: b.localIds,
+        });
+        selectionByModel[modelId] = b.localIds;
+        totalCount += b.localIds.length;
+      }
+
+      nextEntities.push({
+        category,
+        totalCount,
+        buckets,
+        selectionByModel,
+      });
+
+      nextTypeGroups[category] = Array.from(catGroup.byType.entries())
+        .sort(([a], [b]) => {
+          if (a === DEFAULT_TYPE_LABEL) return 1;
+          if (b === DEFAULT_TYPE_LABEL) return -1;
+          return a.localeCompare(b);
+        })
+        .map(([typeName, items]) => ({
+          typeName,
+          items: items.sort(
+            (a, b) =>
+              a.name.localeCompare(b.name) ||
+              a.modelName.localeCompare(b.modelName),
+          ),
+        }));
+    }
+
+    return {
+      entities: nextEntities,
+      typeGroupsByEntity: nextTypeGroups,
+      totalMatched,
+      matchingSelectionByModel,
+    };
+  }, [appliedConditions, modelIndexes]);
+
+  const handleApplyParameterFilter = useCallback(
+    (validConditions: FilterCondition[]) => {
+      setAppliedConditions(validConditions);
+      setActiveGroupKey(null);
+
+      const matchingSelectionByModel: Record<string, number[]> = {};
+      let matchedCount = 0;
+
+      for (const idx of modelIndexes) {
+        for (const el of idx.elements) {
+          if (!evaluateElementAgainstConditions(el, validConditions)) {
+            continue;
+          }
+          matchedCount += 1;
+          if (!matchingSelectionByModel[el.modelId]) {
+            matchingSelectionByModel[el.modelId] = [el.localId];
+          } else {
+            matchingSelectionByModel[el.modelId].push(el.localId);
+          }
+        }
+      }
+
+      if (matchedCount > 0) {
+        void focusSelectionMap(matchingSelectionByModel, false);
+      } else {
+        void clearSelection();
+      }
+    },
+    [clearSelection, focusSelectionMap, modelIndexes],
+  );
+
+  const handleClearParameterFilter = useCallback(() => {
+    setAppliedConditions([]);
+    setDraftConditions([createEmptyFilterCondition()]);
+    setActiveGroupKey(null);
+    void clearSelection();
+  }, [clearSelection]);
 
   const loadEntityTypes = useCallback(
     async (entity: AggregatedEntityGroup) => {
@@ -558,13 +818,20 @@ export const ElementsTreePanel: React.FC = () => {
     );
   }
 
+  const activeEntities = parameterFilteredTree
+    ? parameterFilteredTree.entities
+    : entities;
+  const activeTypeGroupsByEntity = parameterFilteredTree
+    ? parameterFilteredTree.typeGroupsByEntity
+    : typeGroupsByEntity;
+
   const normalizedFilter = filterText.trim().toLowerCase();
-  const filteredEntities = entities.filter((entity) => {
+  const filteredEntities = activeEntities.filter((entity) => {
     if (!normalizedFilter) return true;
     if (entity.category.toLowerCase().includes(normalizedFilter)) {
       return true;
     }
-    const loadedTypes = typeGroupsByEntity[entity.category];
+    const loadedTypes = activeTypeGroupsByEntity[entity.category];
     return Boolean(
       loadedTypes?.some(
         (t) =>
@@ -577,15 +844,43 @@ export const ElementsTreePanel: React.FC = () => {
   });
 
   return (
-    <div className="space-y-3 text-xs">
+    <div className="space-y-2.5 text-xs">
       <div className="flex items-center justify-between gap-2 text-[10px] text-asphalt-400 px-0.5">
         <span>
           {visibleModels.length === 1
             ? `1 modelo mostrado`
             : `${visibleModels.length} modelos mostrados`}
         </span>
-        <span className="font-mono">{entities.length} entidades</span>
+        <span className="font-mono">{activeEntities.length} entidades</span>
       </div>
+
+      <ParameterFilterBuilder
+        parameters={availableParameters}
+        isIndexing={isIndexingParams}
+        draftConditions={draftConditions}
+        appliedConditions={appliedConditions}
+        onChangeDraft={setDraftConditions}
+        onApply={handleApplyParameterFilter}
+        onClear={handleClearParameterFilter}
+      />
+
+      {parameterFilteredTree && (
+        <div className="flex items-center justify-between gap-2 rounded border border-pavasal-500/40 bg-pavasal-500/10 px-2.5 py-1.5 text-[11px]">
+          <span className="text-pavasal-300 font-medium truncate">
+            {parameterFilteredTree.totalMatched}{' '}
+            {parameterFilteredTree.totalMatched === 1
+              ? 'elemento filtrado'
+              : 'elementos filtrados'}
+          </span>
+          <button
+            type="button"
+            onClick={handleClearParameterFilter}
+            className="text-[10px] font-semibold text-pavasal-400 hover:text-pavasal-300 shrink-0"
+          >
+            Quitar filtro
+          </button>
+        </div>
+      )}
 
       <input
         type="search"
@@ -601,15 +896,18 @@ export const ElementsTreePanel: React.FC = () => {
         </p>
       ) : filteredEntities.length === 0 ? (
         <p className="text-center text-asphalt-400 py-4 text-[11px]">
-          No hay entidades o tipos que coincidan con el filtro.
+          {parameterFilteredTree
+            ? 'Ningún elemento cumple todas las condiciones del filtro aplicado.'
+            : 'No hay entidades o tipos que coincidan con el filtro.'}
         </p>
       ) : (
         <div className="space-y-1">
           {filteredEntities.map((entity) => {
             const entityKey = entity.category;
             const isEntityExpanded = expandedEntities.has(entityKey);
-            const isLoadingTypes = loadingEntityKeys.has(entityKey);
-            const typeGroups = typeGroupsByEntity[entityKey];
+            const isLoadingTypes =
+              !parameterFilteredTree && loadingEntityKeys.has(entityKey);
+            const typeGroups = activeTypeGroupsByEntity[entityKey];
             const isEntitySelected = activeGroupKey === entityKey;
 
             const visibleTypeGroups =

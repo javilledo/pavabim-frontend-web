@@ -50,36 +50,75 @@ function formatRoleLabel(roleId: string, dbName?: string): string {
   return SPANISH_ROLE_LABELS[normalized] || trimmedDbName || roleId;
 }
 
-function resolveDisplayName(
+function getUserInitials(displayName?: string, email?: string): string {
+  const source = (displayName || email || '').trim();
+  if (!source) return 'U';
+  const base = source.includes('@') ? source.split('@')[0] : source;
+  const parts = base.split(/[\s.@_-]+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  }
+  return base.slice(0, 2).toUpperCase();
+}
+
+function resolveUserIdentity(
   explicitName: string | undefined,
+  explicitPhotoURL: string | undefined,
   emailOrId: string,
   currentUser: AuthenticatedUser | null,
-): string {
-  if (explicitName?.trim()) {
-    return explicitName.trim();
-  }
+): { displayName: string; photoURL?: string; hasDistinctName: boolean } {
   const normalizedTarget = emailOrId.trim().toLowerCase();
-  if (
+  const isCurrentUser = Boolean(
     currentUser?.email &&
-    currentUser.email.trim().toLowerCase() === normalizedTarget &&
-    currentUser.displayName?.trim()
-  ) {
-    return currentUser.displayName.trim();
-  }
-  const localPart = emailOrId.includes('@')
-    ? emailOrId.split('@')[0]
-    : emailOrId;
-  const words = localPart
-    .split(/[._+-]+/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (words.length === 0) {
-    return emailOrId;
-  }
-  return words
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(' ');
+      currentUser.email.trim().toLowerCase() === normalizedTarget,
+  );
+
+  const resolvedName =
+    explicitName?.trim() ||
+    (isCurrentUser ? currentUser?.displayName?.trim() : undefined) ||
+    emailOrId;
+
+  const resolvedPhoto =
+    explicitPhotoURL?.trim() ||
+    (isCurrentUser ? currentUser?.photoURL?.trim() : undefined) ||
+    undefined;
+
+  return {
+    displayName: resolvedName,
+    photoURL: resolvedPhoto,
+    hasDistinctName: resolvedName.trim().toLowerCase() !== normalizedTarget,
+  };
 }
+
+const AdminUserAvatar: React.FC<{
+  photoURL?: string;
+  displayName?: string;
+  email: string;
+}> = ({ photoURL, displayName, email }) => {
+  const [imgFailed, setImgFailed] = useState(false);
+
+  useEffect(() => {
+    setImgFailed(false);
+  }, [photoURL]);
+
+  if (photoURL && !imgFailed) {
+    return (
+      <img
+        src={photoURL}
+        alt={displayName || email}
+        referrerPolicy="no-referrer"
+        onError={() => setImgFailed(true)}
+        className="w-7 h-7 rounded-full object-cover border border-pavasal-500/60 bg-asphalt-800 shrink-0"
+      />
+    );
+  }
+
+  return (
+    <div className="w-7 h-7 rounded-full bg-pavasal-500/20 border border-pavasal-500/60 text-pavasal-400 text-[10px] font-bold flex items-center justify-center shrink-0">
+      {getUserInitials(displayName, email)}
+    </div>
+  );
+};
 
 const GoogleDriveIcon: React.FC<{ className?: string }> = ({
   className = 'w-4 h-4',
@@ -455,8 +494,13 @@ const ProjectAdminCard: React.FC<ProjectAdminCardProps> = ({
             {members.map((member) => {
               const memberId = member.id || member.email;
               const memberEmail = member.email || member.id;
-              const memberName = resolveDisplayName(
+              const {
+                displayName: memberName,
+                photoURL: memberPhotoURL,
+                hasDistinctName,
+              } = resolveUserIdentity(
                 member.displayName || member.name,
+                member.photoURL,
                 memberEmail,
                 currentUser,
               );
@@ -469,12 +513,21 @@ const ProjectAdminCard: React.FC<ProjectAdminCardProps> = ({
                   key={memberId}
                   className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 px-3 py-2"
                 >
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium text-asphalt-100 truncate">
-                      {memberName}
-                    </div>
-                    <div className="text-[11px] text-asphalt-400 truncate select-text">
-                      {memberEmail}
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    <AdminUserAvatar
+                      photoURL={memberPhotoURL}
+                      displayName={hasDistinctName ? memberName : undefined}
+                      email={memberEmail}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-asphalt-100 truncate select-text">
+                        {memberName}
+                      </div>
+                      {hasDistinctName && (
+                        <div className="text-[11px] text-asphalt-400 truncate select-text">
+                          {memberEmail}
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1133,8 +1186,13 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
                 <div className="divide-y divide-asphalt-800 rounded border border-asphalt-700 bg-asphalt-950/60">
                   {(superAdminsQuery.data || []).map((sa) => {
                     const email = sa.email || sa.id;
-                    const displayName = resolveDisplayName(
+                    const {
+                      displayName,
+                      photoURL,
+                      hasDistinctName,
+                    } = resolveUserIdentity(
                       sa.displayName || sa.name,
+                      sa.photoURL,
                       email,
                       user,
                     );
@@ -1143,12 +1201,21 @@ export const ProjectManagementModal: React.FC<ProjectManagementModalProps> = ({
                         key={sa.id}
                         className="flex items-center justify-between gap-3 px-3.5 py-2.5"
                       >
-                        <div className="min-w-0">
-                          <div className="font-medium text-asphalt-100 truncate">
-                            {displayName}
-                          </div>
-                          <div className="text-[11px] text-asphalt-400 truncate select-text">
-                            {email}
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <AdminUserAvatar
+                            photoURL={photoURL}
+                            displayName={hasDistinctName ? displayName : undefined}
+                            email={email}
+                          />
+                          <div className="min-w-0">
+                            <div className="font-medium text-asphalt-100 truncate select-text">
+                              {displayName}
+                            </div>
+                            {hasDistinctName && (
+                              <div className="text-[11px] text-asphalt-400 truncate select-text">
+                                {email}
+                              </div>
+                            )}
                           </div>
                         </div>
 

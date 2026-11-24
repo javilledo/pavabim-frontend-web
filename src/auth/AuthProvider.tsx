@@ -15,6 +15,7 @@ import {
   getStoredAuthSession,
   saveAuthSession,
   subscribeAuthSessionCleared,
+  subscribeAuthSessionUpdated,
 } from './authSession';
 import { useViewerStore } from '../store/useViewerStore';
 import type { AuthenticatedUser } from '../types/api.types';
@@ -82,10 +83,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   }, [queryClient]);
 
   useEffect(() => {
-    const unsubscribe = subscribeAuthSessionCleared(() => {
+    const unsubscribeCleared = subscribeAuthSessionCleared(() => {
       resetClientSessionState();
     });
-    return unsubscribe;
+    const unsubscribeUpdated = subscribeAuthSessionUpdated((session) => {
+      setUser(session.user);
+    });
+    return () => {
+      unsubscribeCleared();
+      unsubscribeUpdated();
+    };
   }, [resetClientSessionState]);
 
   useEffect(() => {

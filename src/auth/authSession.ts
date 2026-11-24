@@ -10,7 +10,9 @@ export interface StoredAuthSession {
 }
 
 type SessionClearedListener = () => void;
+type SessionUpdatedListener = (session: StoredAuthSession) => void;
 const sessionClearedListeners = new Set<SessionClearedListener>();
+const sessionUpdatedListeners = new Set<SessionUpdatedListener>();
 
 export function normalizeBackendAuthSession(
   payload: BackendAuthResponse,
@@ -79,6 +81,9 @@ export function saveAuthSession(session: StoredAuthSession): void {
   } catch {
     // Ignore storage quota or sandbox restrictions
   }
+  for (const listener of sessionUpdatedListeners) {
+    listener(session);
+  }
 }
 
 export function clearAuthSession(): void {
@@ -95,6 +100,15 @@ export function subscribeAuthSessionCleared(
   sessionClearedListeners.add(listener);
   return () => {
     sessionClearedListeners.delete(listener);
+  };
+}
+
+export function subscribeAuthSessionUpdated(
+  listener: SessionUpdatedListener,
+): () => void {
+  sessionUpdatedListeners.add(listener);
+  return () => {
+    sessionUpdatedListeners.delete(listener);
   };
 }
 

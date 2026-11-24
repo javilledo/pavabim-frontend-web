@@ -23,6 +23,7 @@ export interface ProjectMember {
   email: string;
   name?: string;
   displayName?: string;
+  photoURL?: string;
   roleId: ProjectRole | string;
   rolePath?: string;
   roleName?: string;
@@ -173,6 +174,8 @@ export interface MemberMutationResponse {
   success: boolean;
   id: string;
   email?: string;
+  displayName?: string;
+  photoURL?: string;
   roleId: string;
 }
 
@@ -246,6 +249,7 @@ export interface SuperAdminEntry {
   email?: string;
   name?: string;
   displayName?: string;
+  photoURL?: string;
   uid?: string | null;
   roleId?: string;
   assignedAt?: unknown;
@@ -261,6 +265,8 @@ export interface AssignSuperAdminPayload {
 export interface AssignSuperAdminResponse {
   success: boolean;
   email: string;
+  displayName?: string;
+  photoURL?: string;
   userId?: string | null;
   roleId: 'rolePermissions/superadmin' | 'rolePermissions/viewer';
 }
