@@ -1,33 +1,25 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useViewerStore } from '../../store/useViewerStore';
+import {
+  extractInspectorPropertyGroups,
+  isVariosMarker,
+  STRUCTURED_GROUPS_KEY,
+  type InspectorPropertyGroup,
+} from '../../utils/elementParameterFilter';
 import { useEngine } from '../../viewer/EngineContext';
 import { SelectionAppearanceControls } from '../viewer/SelectionAppearanceControls';
 
-const VARIOS_FLAG = '__pavabimVarios';
-
-const isVariosValue = (val: unknown): boolean => {
-  if (!val || typeof val !== 'object') return false;
-  return Boolean((val as Record<string, unknown>)[VARIOS_FLAG]);
-};
-
-const formatValue = (val: unknown): string => {
-  if (val === null || val === undefined) return '—';
-  if (typeof val === 'object' && 'value' in (val as Record<string, unknown>)) {
-    const inner = (val as Record<string, unknown>).value;
-    return inner !== null && inner !== undefined ? String(inner) : '—';
-  }
-  return String(val);
-};
-
 const renderPropertyValue = (val: unknown): React.ReactNode => {
-  if (isVariosValue(val)) {
+  if (isVariosMarker(val)) {
     return (
       <span className="italic font-normal text-asphalt-300">
         &lt;varios&gt;
       </span>
     );
   }
-  return formatValue(val);
+  if (val === null || val === undefined) return '—';
+  const str = String(val).trim();
+  return str.length > 0 ? str : '—';
 };
 
 export const PropertiesInspector: React.FC = () => {
@@ -39,6 +31,57 @@ export const PropertiesInspector: React.FC = () => {
     selectedElementsMap,
   } = useViewerStore();
   const { clearSelection, focusElement, focusSelectionMap } = useEngine();
+
+  const [propertyFilterText, setPropertyFilterText] = useState('');
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    new Set(),
+  );
+
+  // Reset collapsed state only when selection is cleared completely
+  useEffect(() => {
+    if (!selectedElementId) {
+      setCollapsedGroups(new Set());
+      setPropertyFilterText('');
+    }
+  }, [selectedElementId]);
+
+  const rawGroups = useMemo<InspectorPropertyGroup[]>(() => {
+    if (!selectedElementProperties) return [];
+    const structured = (selectedElementProperties as Record<string, unknown>)[
+      STRUCTURED_GROUPS_KEY
+    ];
+    if (Array.isArray(structured)) {
+      return structured as InspectorPropertyGroup[];
+    }
+    return extractInspectorPropertyGroups(selectedElementProperties).groups;
+  }, [selectedElementProperties]);
+
+  const filteredGroups = useMemo(() => {
+    const term = propertyFilterText.trim().toLowerCase();
+    if (!term) return rawGroups;
+
+    const result: InspectorPropertyGroup[] = [];
+    for (const grp of rawGroups) {
+      if (grp.name.toLowerCase().includes(term)) {
+        result.push(grp);
+        continue;
+      }
+      const matchingEntries = grp.entries.filter((entry) => {
+        if (entry.key.toLowerCase().includes(term)) return true;
+        if (!isVariosMarker(entry.value)) {
+          return String(entry.value).toLowerCase().includes(term);
+        }
+        return false;
+      });
+      if (matchingEntries.length > 0) {
+        result.push({
+          ...grp,
+          entries: matchingEntries,
+        });
+      }
+    }
+    return result;
+  }, [propertyFilterText, rawGroups]);
 
   if (!selectedElementId) {
     return (
@@ -69,14 +112,38 @@ export const PropertiesInspector: React.FC = () => {
   const isMultiSelection = totalSelectedCount > 1;
   const hasSingleCommonLocalId = new Set(allSelectedIds).size <= 1;
 
-  const entries = selectedElementProperties
-    ? Object.entries(selectedElementProperties)
-    : [];
-  const primitiveAttributes = entries.filter(([, val]) => !Array.isArray(val));
-  const nestedGroups = entries.filter(([, val]) => Array.isArray(val));
+  const isLoadingProperties = selectedElementProperties === null;
+  const totalPropertiesCount = rawGroups.reduce(
+    (sum, g) => sum + g.entries.length,
+    0,
+  );
+
+  const toggleGroupCollapsed = (groupName: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupName)) {
+        next.delete(groupName);
+      } else {
+        next.add(groupName);
+      }
+      return next;
+    });
+  };
+
+  const allCollapsed =
+    filteredGroups.length > 0 &&
+    filteredGroups.every((g) => collapsedGroups.has(g.name));
+
+  const toggleAllGroups = () => {
+    if (allCollapsed) {
+      setCollapsedGroups(new Set());
+    } else {
+      setCollapsedGroups(new Set(filteredGroups.map((g) => g.name)));
+    }
+  };
 
   return (
-    <div className="space-y-4 text-xs">
+    <div className="space-y-3 text-xs">
       {/* Header Badge */}
       <div className="bg-asphalt-800/80 border border-asphalt-700 border-l-2 border-l-pavasal-500 rounded-md p-3">
         <div className="flex items-center justify-between">
@@ -88,6 +155,7 @@ export const PropertiesInspector: React.FC = () => {
           <div className="flex items-center space-x-2">
             {selectedModelId && (
               <button
+                type="button"
                 onClick={() =>
                   isMultiSelection
                     ? void focusSelectionMap(selectedElementsMap, true)
@@ -107,6 +175,7 @@ export const PropertiesInspector: React.FC = () => {
               </button>
             )}
             <button
+              type="button"
               onClick={clearSelection}
               className="text-[11px] text-asphalt-300 hover:text-white transition-colors"
               title="Limpiar selección"
@@ -115,7 +184,7 @@ export const PropertiesInspector: React.FC = () => {
             </button>
           </div>
         </div>
-        <div className="mt-2 font-mono text-sm text-white">
+        <div className="mt-2 font-mono text-sm text-white select-text">
           Local ID:{' '}
           {hasSingleCommonLocalId ? (
             `#${selectedElementId}`
@@ -176,67 +245,110 @@ export const PropertiesInspector: React.FC = () => {
         <SelectionAppearanceControls compact />
       </div>
 
-      {/* Attributes */}
-      {primitiveAttributes.length > 0 && (
-        <div className="bg-asphalt-950/50 border border-asphalt-700 rounded-md overflow-hidden">
-          <div className="px-3 py-2 bg-asphalt-950 border-b border-asphalt-700 font-semibold text-pavasal-400 text-[11px] uppercase tracking-wider">
-            Atributos principales
-          </div>
-          <div className="divide-y divide-asphalt-800">
-            {primitiveAttributes.map(([key, val]) => (
-              <div key={key} className="px-3 py-1.5 flex justify-between gap-2">
-                <span className="text-asphalt-400 truncate" title={key}>
-                  {key}
-                </span>
-                <span className="text-asphalt-100 font-medium text-right break-all">
-                  {renderPropertyValue(val)}
-                </span>
-              </div>
-            ))}
-          </div>
+      {/* Properties Search & Summary Header */}
+      {isLoadingProperties ? (
+        <div className="rounded-md border border-asphalt-800 bg-asphalt-950/50 p-4 text-center text-asphalt-400">
+          Cargando Property Sets y atributos...
         </div>
-      )}
+      ) : rawGroups.length === 0 ? (
+        <div className="text-center text-asphalt-400 py-4">
+          Este elemento no contiene propiedades IFC embebidas.
+        </div>
+      ) : (
+        <div className="space-y-2.5">
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between gap-2 px-0.5 text-[10px] text-asphalt-400">
+              <span>
+                {rawGroups.length}{' '}
+                {rawGroups.length === 1 ? 'grupo' : 'Property Sets'} ·{' '}
+                {totalPropertiesCount}{' '}
+                {totalPropertiesCount === 1 ? 'propiedad' : 'propiedades'}
+              </span>
+              {filteredGroups.length > 1 && (
+                <button
+                  type="button"
+                  onClick={toggleAllGroups}
+                  className="text-pavasal-400 hover:text-pavasal-300 font-medium transition-colors"
+                >
+                  {allCollapsed ? 'Expandir todo' : 'Contraer todo'}
+                </button>
+              )}
+            </div>
 
-      {/* Property Sets / Relations */}
-      {nestedGroups.map(([groupKey, items]) => (
-        <div
-          key={groupKey}
-          className="bg-asphalt-950/50 border border-asphalt-700 rounded-md overflow-hidden"
-        >
-          <div className="px-3 py-2 bg-asphalt-950 border-b border-asphalt-700 font-semibold text-asphalt-200">
-            {groupKey} ({(items as unknown[]).length})
+            {totalPropertiesCount > 6 && (
+              <input
+                type="search"
+                value={propertyFilterText}
+                onChange={(e) => setPropertyFilterText(e.target.value)}
+                placeholder="Buscar propiedad o Property Set..."
+                className="w-full rounded border border-asphalt-700 bg-asphalt-950 px-2.5 py-1.5 text-[11px] text-asphalt-100 placeholder-asphalt-500 focus:border-pavasal-500 focus:outline-none"
+              />
+            )}
           </div>
-          <div className="divide-y divide-asphalt-800">
-            {(items as Record<string, unknown>[]).map((item, idx) => {
-              const name = item.Name ? formatValue(item.Name) : `Item ${idx + 1}`;
+
+          {filteredGroups.length === 0 ? (
+            <div className="rounded border border-asphalt-800 bg-asphalt-950/50 p-3 text-center text-[11px] text-asphalt-400">
+              No hay propiedades ni Property Sets que coincidan con la búsqueda.
+            </div>
+          ) : (
+            filteredGroups.map((group) => {
+              const isCollapsed =
+                !propertyFilterText.trim() && collapsedGroups.has(group.name);
+
               return (
-                <div key={`${groupKey}-${idx}`} className="p-2.5 space-y-1">
-                  <div className="text-[11px] font-medium text-pavasal-400">
-                    {name}
-                  </div>
-                  {Object.entries(item)
-                    .filter(([k]) => k !== 'Name' && !Array.isArray(item[k]))
-                    .map(([k, v]) => (
-                      <div
-                        key={k}
-                        className="flex justify-between gap-2 text-[11px]"
+                <div
+                  key={group.name}
+                  className="bg-asphalt-950/50 border border-asphalt-700 rounded-md overflow-hidden"
+                >
+                  <button
+                    type="button"
+                    onClick={() => toggleGroupCollapsed(group.name)}
+                    className="w-full px-3 py-2 bg-asphalt-950 hover:bg-asphalt-900/90 border-b border-asphalt-800 flex items-center justify-between gap-2 text-left transition-colors"
+                    title={group.name}
+                  >
+                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                      <span className="text-[11px] text-asphalt-400 shrink-0">
+                        {isCollapsed ? '▸' : '▾'}
+                      </span>
+                      <span
+                        className={`truncate text-[11px] font-semibold ${
+                          group.isAttributesGroup
+                            ? 'uppercase tracking-wider text-pavasal-400'
+                            : 'text-pavasal-400'
+                        }`}
                       >
-                        <span className="text-asphalt-400 truncate">{k}</span>
-                        <span className="text-asphalt-100 text-right break-all">
-                          {renderPropertyValue(v)}
-                        </span>
-                      </div>
-                    ))}
+                        {group.name}
+                      </span>
+                    </div>
+                    <span className="rounded-full bg-asphalt-800 px-1.5 py-0.5 text-[10px] font-mono text-asphalt-300 shrink-0">
+                      {group.entries.length}
+                    </span>
+                  </button>
+
+                  {!isCollapsed && (
+                    <div className="divide-y divide-asphalt-800">
+                      {group.entries.map(({ key, value }) => (
+                        <div
+                          key={key}
+                          className="px-3 py-1.5 flex items-start justify-between gap-3"
+                        >
+                          <span
+                            className="text-asphalt-400 text-[11px] break-words min-w-0 flex-1 select-text"
+                            title={key}
+                          >
+                            {key}
+                          </span>
+                          <span className="text-asphalt-100 font-medium text-[11px] text-right break-all max-w-[58%] select-text">
+                            {renderPropertyValue(value)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
-            })}
-          </div>
-        </div>
-      ))}
-
-      {entries.length === 0 && (
-        <div className="text-center text-asphalt-400 py-4">
-          Este elemento no contiene atributos IFC extendidos embebidos.
+            })
+          )}
         </div>
       )}
     </div>

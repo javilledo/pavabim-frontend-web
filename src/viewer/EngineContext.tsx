@@ -24,6 +24,10 @@ import {
 } from '../store/useViewerStore';
 import type { CameraViewpointData } from '../types/bcf.types';
 import { formatDecimalEs } from '../utils/numberFormat';
+import {
+  buildStructuredSelectionProperties,
+  getSafeElementItemsDataConfig,
+} from '../utils/elementParameterFilter';
 import { computeMeshMetrics } from '../utils/selectionMeasurements';
 import {
   collectCoplanarFragmentFaceArea,
@@ -423,127 +427,6 @@ function setModelHierarchyVisibility(
   model.object.traverse((child) => {
     child.visible = visible;
   });
-}
-
-const VARIOS_FLAG = '__pavabimVarios';
-
-interface VariosAttributeMarker {
-  value: '<varios>';
-  [VARIOS_FLAG]: true;
-}
-
-function createVariosMarker(): VariosAttributeMarker {
-  return {
-    value: '<varios>',
-    [VARIOS_FLAG]: true,
-  };
-}
-
-function formatComparableAttributeValue(val: unknown): string {
-  if (val === null || val === undefined) return '—';
-  if (typeof val === 'object' && 'value' in (val as Record<string, unknown>)) {
-    const inner = (val as Record<string, unknown>).value;
-    return inner !== null && inner !== undefined ? String(inner) : '—';
-  }
-  return String(val);
-}
-
-function mergeMultipleElementProperties(
-  records: Record<string, unknown>[],
-  totalCount = records.length
-): Record<string, unknown> {
-  const orderedKeys: string[] = [];
-  const seenKeys = new Set<string>();
-
-  for (const rec of records) {
-    for (const key of Object.keys(rec)) {
-      if (!seenKeys.has(key)) {
-        seenKeys.add(key);
-        orderedKeys.push(key);
-      }
-    }
-  }
-
-  const merged: Record<string, unknown> = {};
-
-  for (const key of orderedKeys) {
-    const isArrayInAny = records.some((rec) => Array.isArray(rec[key]));
-
-    if (!isArrayInAny) {
-      if (records.length < totalCount) {
-        merged[key] = createVariosMarker();
-        continue;
-      }
-
-      let allHaveKey = true;
-      let firstFormatted: string | null = null;
-      let allMatch = true;
-
-      for (let i = 0; i < records.length; i++) {
-        const rec = records[i];
-        if (!Object.prototype.hasOwnProperty.call(rec, key)) {
-          allHaveKey = false;
-          allMatch = false;
-          break;
-        }
-        const formatted = formatComparableAttributeValue(rec[key]);
-        if (i === 0) {
-          firstFormatted = formatted;
-        } else if (formatted !== firstFormatted) {
-          allMatch = false;
-          break;
-        }
-      }
-
-      if (allHaveKey && allMatch) {
-        merged[key] = records[0][key];
-      } else {
-        merged[key] = createVariosMarker();
-      }
-    } else {
-      const subItemOrder: string[] = [];
-      const subItemsByGroupName = new Map<string, Record<string, unknown>[]>();
-
-      for (const rec of records) {
-        const arr = rec[key];
-        if (!Array.isArray(arr)) continue;
-
-        const seenInThisRec = new Map<string, number>();
-        for (let idx = 0; idx < arr.length; idx++) {
-          const entry = arr[idx];
-          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
-          const entryObj = entry as Record<string, unknown>;
-          const baseName = entryObj.Name
-            ? formatComparableAttributeValue(entryObj.Name)
-            : `Item ${idx + 1}`;
-          const occurrence = (seenInThisRec.get(baseName) ?? 0) + 1;
-          seenInThisRec.set(baseName, occurrence);
-          const subKey = occurrence === 1 ? baseName : `${baseName}#${occurrence}`;
-
-          if (!subItemsByGroupName.has(subKey)) {
-            subItemOrder.push(subKey);
-            subItemsByGroupName.set(subKey, []);
-          }
-          subItemsByGroupName.get(subKey)!.push(entryObj);
-        }
-      }
-
-      const mergedSubItems: Record<string, unknown>[] = [];
-      for (const subKey of subItemOrder) {
-        const groupEntries = subItemsByGroupName.get(subKey) ?? [];
-        if (groupEntries.length === 0) continue;
-        const mergedSub = mergeMultipleElementProperties(groupEntries, totalCount);
-        if (groupEntries[0].Name !== undefined) {
-          mergedSub.Name = groupEntries[0].Name;
-        }
-        mergedSubItems.push(mergedSub);
-      }
-
-      merged[key] = mergedSubItems;
-    }
-  }
-
-  return merged;
 }
 
 function computeWorldFocalOffset(
@@ -1688,20 +1571,16 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           try {
             const allItems: Record<string, unknown>[] = [];
             const SELECTION_PROPS_CHUNK_SIZE = 200;
-            const SELECTION_PROPS_MAX_ITEMS = 600;
-            const itemsDataConfig =
-              totalSelectedCount > SELECTION_PROPS_MAX_ITEMS
-                ? {
-                  attributesDefault: true,
-                  relationsDefault: { attributes: false, relations: false },
-                }
-                : undefined;
+            const SELECTION_PROPS_MAX_ITEMS =
+              totalSelectedCount > 400 ? 120 : 400;
 
             for (const [modelId, ids] of Object.entries(normalizedMap)) {
               if (allItems.length >= SELECTION_PROPS_MAX_ITEMS) break;
               const model = fragments.list.get(modelId);
               if (!model) continue;
 
+              const itemsDataConfig =
+                await getSafeElementItemsDataConfig(model);
               const remainingBudget = SELECTION_PROPS_MAX_ITEMS - allItems.length;
               const targetIds =
                 ids.length > remainingBudget
@@ -1723,9 +1602,10 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
                   i,
                   i + SELECTION_PROPS_CHUNK_SIZE,
                 );
-                const chunkData = itemsDataConfig
-                  ? await model.getItemsData(chunkIds, itemsDataConfig)
-                  : await model.getItemsData(chunkIds);
+                const chunkData = await model.getItemsData(
+                  chunkIds,
+                  itemsDataConfig,
+                );
                 for (const item of chunkData) {
                   if (item && typeof item === 'object') {
                     allItems.push(item as Record<string, unknown>);
@@ -1734,10 +1614,8 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
               }
             }
 
-            if (allItems.length === 1 && totalSelectedCount === 1) {
-              props = allItems[0];
-            } else if (allItems.length > 0) {
-              props = mergeMultipleElementProperties(
+            if (allItems.length > 0) {
+              props = buildStructuredSelectionProperties(
                 allItems,
                 totalSelectedCount,
               );
