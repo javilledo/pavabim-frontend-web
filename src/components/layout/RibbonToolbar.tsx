@@ -5,6 +5,7 @@ import { useAuth } from '../../auth/AuthProvider';
 import { useProjectRole } from '../../hooks/useProjectRole';
 import { useViewerStore, type MeasureMode } from '../../store/useViewerStore';
 import { useEngine } from '../../viewer/EngineContext';
+import { SelectionAppearanceControls } from '../viewer/SelectionAppearanceControls';
 import {
   ProjectManagementModal,
   type ProjectManagementTab,
@@ -24,12 +25,16 @@ export const RibbonToolbar: React.FC = () => {
   const adminMenuRef = useRef<HTMLDivElement | null>(null);
   const measureGroupRef = useRef<HTMLDivElement | null>(null);
   const measureMenuRef = useRef<HTMLDivElement | null>(null);
+  const appearanceBtnRef = useRef<HTMLButtonElement | null>(null);
+  const appearanceMenuRef = useRef<HTMLDivElement | null>(null);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
   const [modalInitialTab, setModalInitialTab] =
     useState<ProjectManagementTab>('overview');
   const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
   const [isMeasureMenuOpen, setIsMeasureMenuOpen] = useState(false);
   const [measureMenuPos, setMeasureMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
+  const [appearancePos, setAppearancePos] = useState<{ x: number; y: number } | null>(null);
   const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
 
   const { user, loading: authLoading, logout } = useAuth();
@@ -53,6 +58,7 @@ export const RibbonToolbar: React.FC = () => {
     loadedModels,
     selectedElementsMap,
     hiddenElementsMap,
+    customAppearanceCount,
     isIsolationActive,
     projects,
     currentProject,
@@ -73,6 +79,7 @@ export const RibbonToolbar: React.FC = () => {
     hideSelectedElements,
     isolateSelectedElements,
     showAllElements,
+    resetAllCustomAppearances,
   } = useEngine();
 
   const selectedCount = useMemo(
@@ -205,6 +212,60 @@ export const RibbonToolbar: React.FC = () => {
       window.removeEventListener('resize', closeOnResize);
     };
   }, [isMeasureMenuOpen]);
+
+  useEffect(() => {
+    if (selectedCount === 0 && isAppearanceOpen) {
+      setIsAppearanceOpen(false);
+    }
+  }, [isAppearanceOpen, selectedCount]);
+
+  useEffect(() => {
+    if (!isAppearanceOpen) return;
+
+    const handlePointerDown = (e: PointerEvent) => {
+      const target = e.target;
+      if (
+        target instanceof Node &&
+        (appearanceMenuRef.current?.contains(target) ||
+          appearanceBtnRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setIsAppearanceOpen(false);
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsAppearanceOpen(false);
+      }
+    };
+
+    const closeOnResize = () => setIsAppearanceOpen(false);
+
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('resize', closeOnResize);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', closeOnResize);
+    };
+  }, [isAppearanceOpen]);
+
+  const toggleAppearanceMenu = () => {
+    if (isAppearanceOpen) {
+      setIsAppearanceOpen(false);
+      return;
+    }
+    const rect = appearanceBtnRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const popoverWidth = 264;
+    setAppearancePos({
+      x: Math.min(rect.left, Math.max(8, window.innerWidth - popoverWidth - 8)),
+      y: rect.bottom + 6,
+    });
+    setIsAppearanceOpen(true);
+  };
 
   const toggleMeasureModeMenu = () => {
     if (isMeasureMenuOpen) {
@@ -665,6 +726,73 @@ export const RibbonToolbar: React.FC = () => {
             Mostrar todo
           </button>
 
+          <button
+            ref={appearanceBtnRef}
+            type="button"
+            disabled={!isEngineReady || selectedCount === 0}
+            aria-haspopup="dialog"
+            aria-expanded={isAppearanceOpen}
+            onClick={toggleAppearanceMenu}
+            className={`px-2.5 py-1.5 rounded text-xs font-medium disabled:opacity-40 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+              isAppearanceOpen
+                ? 'bg-pavasal-500 text-asphalt-950 font-semibold shadow-sm'
+                : 'text-asphalt-200 hover:bg-asphalt-800 hover:text-white'
+            }`}
+            title={
+              selectedCount > 0
+                ? `Cambiar color o transparencia de ${selectedCount} elemento${selectedCount === 1 ? '' : 's'} seleccionado${selectedCount === 1 ? '' : 's'}`
+                : 'Selecciona uno o más elementos para cambiar su color o transparencia'
+            }
+          >
+            <svg
+              className="w-3.5 h-3.5 shrink-0"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M8 2a6 6 0 1 0 0 12h1.2a1.8 1.8 0 0 0 1.4-2.9l-.3-.4a1.5 1.5 0 0 1 1.2-2.4H13A1 1 0 0 0 14 7.3 6 6 0 0 0 8 2Z" />
+              <circle cx="5.2" cy="6.6" r="0.8" fill="currentColor" stroke="none" />
+              <circle cx="8" cy="5.2" r="0.8" fill="currentColor" stroke="none" />
+              <circle cx="10.8" cy="6.6" r="0.8" fill="currentColor" stroke="none" />
+              <circle cx="5.6" cy="9.8" r="0.8" fill="currentColor" stroke="none" />
+            </svg>
+            Apariencia
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void resetAllCustomAppearances()}
+            disabled={!isEngineReady || customAppearanceCount === 0}
+            className={`px-2.5 py-1.5 rounded text-xs font-medium disabled:opacity-40 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+              customAppearanceCount > 0
+                ? 'bg-pavasal-500/15 border border-pavasal-500/50 text-pavasal-400 hover:bg-pavasal-500 hover:text-asphalt-950'
+                : 'text-asphalt-200 hover:bg-asphalt-800 hover:text-white'
+            }`}
+            title={
+              customAppearanceCount > 0
+                ? `Restablecer visualización (${customAppearanceCount} elemento${customAppearanceCount === 1 ? '' : 's'} con color o transparencia modificados)`
+                : 'Restablecer visualización (no hay colores ni transparencias modificados)'
+            }
+          >
+            <svg
+              className="w-3.5 h-3.5 shrink-0"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M3 7a5 5 0 1 1 1.2 4.3M3 4v3h3" />
+            </svg>
+            Restablecer visualización
+          </button>
+
           <div className="h-4 w-px bg-asphalt-700 mx-1 shrink-0" />
 
           {/* Camera Projection Switcher: Perspective (Conical) vs Orthographic */}
@@ -1052,6 +1180,31 @@ export const RibbonToolbar: React.FC = () => {
               </div>
             </div>
           </button>
+        </div>
+      )}
+
+      {isAppearanceOpen && appearancePos && selectedCount > 0 && (
+        <div
+          ref={appearanceMenuRef}
+          role="dialog"
+          aria-label="Apariencia de elementos seleccionados"
+          style={{ left: appearancePos.x, top: appearancePos.y }}
+          className="fixed z-50 w-[264px] rounded-lg border border-asphalt-700 bg-asphalt-900/95 backdrop-blur p-3 shadow-2xl"
+        >
+          <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-asphalt-800">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-pavasal-400">
+              Apariencia ({selectedCount})
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsAppearanceOpen(false)}
+              className="text-asphalt-400 hover:text-white text-xs leading-none px-1"
+              title="Cerrar"
+            >
+              ✕
+            </button>
+          </div>
+          <SelectionAppearanceControls />
         </div>
       )}
 

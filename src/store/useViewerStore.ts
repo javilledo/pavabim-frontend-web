@@ -61,6 +61,23 @@ if (typeof window !== 'undefined') {
   }
 }
 
+export interface ElementAppearanceOverride {
+  color?: string;
+  opacity?: number;
+}
+
+function countCustomAppearances(
+  map: Record<string, Record<number, ElementAppearanceOverride>>,
+): number {
+  let count = 0;
+  for (const overrides of Object.values(map)) {
+    if (overrides) {
+      count += Object.keys(overrides).length;
+    }
+  }
+  return count;
+}
+
 interface ViewerState {
   // Navigation & Viewer Tools
   activeTool: ActiveTool;
@@ -81,6 +98,8 @@ interface ViewerState {
   selectedElementProperties: Record<string, unknown> | null;
   selectedElementsMap: Record<string, number[]>;
   hiddenElementsMap: Record<string, number[]>;
+  customAppearancesMap: Record<string, Record<number, ElementAppearanceOverride>>;
+  customAppearanceCount: number;
   isIsolationActive: boolean;
   localViewpoints: LocalViewpoint[];
 
@@ -124,6 +143,10 @@ interface ViewerState {
   removeHiddenElements: (items: Record<string, number[]>) => void;
   setIsolationActive: (active: boolean) => void;
   clearHiddenElements: () => void;
+  setCustomAppearances: (
+    map: Record<string, Record<number, ElementAppearanceOverride>>,
+  ) => void;
+  clearCustomAppearances: () => void;
   addLocalViewpoint: (vp: LocalViewpoint) => void;
   removeLocalViewpoint: (id: string) => void;
 
@@ -153,6 +176,8 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   selectedElementProperties: null,
   selectedElementsMap: {},
   hiddenElementsMap: {},
+  customAppearancesMap: {},
+  customAppearanceCount: 0,
   isIsolationActive: false,
   localViewpoints: [],
 
@@ -220,10 +245,14 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       delete nextSelection[modelId];
       const nextHidden = { ...state.hiddenElementsMap };
       delete nextHidden[modelId];
+      const nextAppearances = { ...state.customAppearancesMap };
+      delete nextAppearances[modelId];
       return {
         loadedModels: state.loadedModels.filter((m) => m.id !== modelId),
         selectedElementsMap: nextSelection,
         hiddenElementsMap: nextHidden,
+        customAppearancesMap: nextAppearances,
+        customAppearanceCount: countCustomAppearances(nextAppearances),
         selectedElementId:
           state.selectedModelId === modelId ? null : state.selectedElementId,
         selectedModelId:
@@ -246,6 +275,8 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         loadedModels: [],
         selectedElementsMap: {},
         hiddenElementsMap: {},
+        customAppearancesMap: {},
+        customAppearanceCount: 0,
         isIsolationActive: false,
         selectedElementId: null,
         selectedModelId: null,
@@ -352,6 +383,18 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   clearHiddenElements: () =>
     set({ hiddenElementsMap: {}, isIsolationActive: false }),
 
+  setCustomAppearances: (customAppearancesMap) =>
+    set({
+      customAppearancesMap,
+      customAppearanceCount: countCustomAppearances(customAppearancesMap),
+    }),
+
+  clearCustomAppearances: () =>
+    set({
+      customAppearancesMap: {},
+      customAppearanceCount: 0,
+    }),
+
   addLocalViewpoint: (vp) =>
     set((state) => ({
       localViewpoints: [vp, ...state.localViewpoints],
@@ -404,6 +447,8 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
               selectedElementProperties: null,
               selectedElementsMap: {},
               hiddenElementsMap: {},
+              customAppearancesMap: {},
+              customAppearanceCount: 0,
               isIsolationActive: false,
               isSectionActive: false,
               isSectionGizmosVisible: true,
@@ -442,6 +487,8 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       selectedElementProperties: null,
       selectedElementsMap: {},
       hiddenElementsMap: {},
+      customAppearancesMap: {},
+      customAppearanceCount: 0,
       isIsolationActive: false,
       isSectionActive: false,
       isSectionGizmosVisible: true,

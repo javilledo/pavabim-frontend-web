@@ -17,7 +17,11 @@ import * as OBCF from '@thatopen/components-front';
 import * as FRAGS from '@thatopen/fragments';
 import '@thatopen/fragments/inline';
 import CameraControls from 'camera-controls';
-import { useViewerStore, type CameraProjectionMode } from '../store/useViewerStore';
+import {
+  useViewerStore,
+  type CameraProjectionMode,
+  type ElementAppearanceOverride,
+} from '../store/useViewerStore';
 import type { CameraViewpointData } from '../types/bcf.types';
 import { formatDecimalEs } from '../utils/numberFormat';
 import { computeMeshMetrics } from '../utils/selectionMeasurements';
@@ -93,7 +97,12 @@ export interface EngineContextValue {
   focusElements: (modelId: string, localIds: number[], zoomToSelection?: boolean) => Promise<void>;
   focusSelectionMap: (selectionByModel: Record<string, number[]>, zoomToSelection?: boolean) => Promise<void>;
   toggleSelectionMap: (selectionByModel: Record<string, number[]>, zoomToSelection?: boolean) => Promise<void>;
-  selectModelElements: (modelId: string, additive?: boolean) => Promise<void>;
+  getModelElementIds: (modelId: string) => Promise<number[]>;
+  selectModelElements: (
+    modelId: string,
+    additive?: boolean,
+    zoomToSelection?: boolean
+  ) => Promise<void>;
   selectElementsInScreenRect: (
     startClientX: number,
     startClientY: number,
@@ -107,6 +116,10 @@ export interface EngineContextValue {
   toggleHideSelectedElements: () => Promise<void>;
   isolateSelectedElements: () => Promise<void>;
   showAllElements: () => Promise<void>;
+  setSelectedElementsColor: (hexColor: string | null) => Promise<void>;
+  setSelectedElementsTransparency: (transparencyPct: number | null) => Promise<void>;
+  resetSelectedElementsAppearance: () => Promise<void>;
+  resetAllCustomAppearances: () => Promise<void>;
   captureSnapshotBlob: () => Promise<Blob | null>;
   getCameraViewpoint: () => CameraViewpointData | null;
   setCameraViewpoint: (data: CameraViewpointData) => Promise<void>;
@@ -324,6 +337,82 @@ function getVisibleModelsBounds(fragments: OBC.FragmentsManager | null): THREE.B
   }
 
   return hasBox && !combinedBox.isEmpty() ? combinedBox : null;
+}
+
+const CUSTOM_APPEARANCE_PREFIX = 'custom-appearance:';
+
+function restoreSelectHighlightPriority(
+  highlighter: OBCF.Highlighter | null
+): void {
+  const selectStyle = highlighter?.styles.get('select') as
+    | (Record<string, unknown> & { priority?: number })
+    | undefined;
+  if (selectStyle && 'priority' in selectStyle) {
+    delete selectStyle.priority;
+  }
+}
+
+async function collectModelElementIds(
+  model: FRAGS.FragmentsModel
+): Promise<number[]> {
+  const idSet = new Set<number>();
+
+  try {
+    const geomCategories = await model.getItemsWithGeometryCategories();
+    let categories = Array.from(
+      new Set(geomCategories.filter((cat): cat is string => Boolean(cat)))
+    );
+
+    if (categories.length === 0) {
+      const allCategories = await model.getCategories();
+      categories = allCategories.filter(
+        (cat) => !cat.endsWith('TYPE') && !cat.startsWith('IFCREL')
+      );
+    }
+
+    if (categories.length > 0) {
+      const regexes = categories.map(
+        (cat) => new RegExp(`^${cat.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
+      );
+      const itemsMap = await model.getItemsOfCategories(regexes);
+      for (const ids of Object.values(itemsMap)) {
+        if (!ids) continue;
+        for (const id of ids) {
+          if (typeof id === 'number' && Number.isFinite(id)) {
+            idSet.add(id);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[EngineContext] Error collecting category element IDs:', err);
+  }
+
+  try {
+    const geomIds = await model.getItemsIdsWithGeometry();
+    for (const id of geomIds) {
+      if (typeof id === 'number' && Number.isFinite(id)) {
+        idSet.add(id);
+      }
+    }
+  } catch (err) {
+    console.warn('[EngineContext] Error collecting geometry element IDs:', err);
+  }
+
+  if (idSet.size === 0) {
+    try {
+      const fallbackIds = await model.getLocalIds();
+      for (const id of fallbackIds) {
+        if (typeof id === 'number' && Number.isFinite(id)) {
+          idSet.add(id);
+        }
+      }
+    } catch {
+      // Ignore fallback failures
+    }
+  }
+
+  return Array.from(idSet);
 }
 
 function setModelHierarchyVisibility(
@@ -924,6 +1013,9 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const volumeMetricCacheRef = useRef<
     Map<string, { volume: number; center: THREE.Vector3 }>
   >(new Map());
+  const modelElementIdsCacheRef = useRef<Map<string, number[]>>(new Map());
+  const appearanceSyncInFlightRef = useRef(false);
+  const appearanceSyncPendingRef = useRef<{ suppressSelectOverlay: boolean } | null>(null);
   const componentsRef = useRef<OBC.Components | null>(null);
   const worldRef = useRef<OBC.SimpleWorld<
     OBC.SimpleScene,
@@ -969,6 +1061,8 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     removeHiddenElements,
     setIsolationActive,
     clearHiddenElements,
+    setCustomAppearances,
+    clearCustomAppearances,
     setModelLoading,
     addLoadedModel,
     removeLoadedModel,
@@ -1335,20 +1429,216 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             renderedFaces: 0,
             opacity: 0.85,
             transparent: true,
-          },
+            preserveOriginalMaterial: true,
+            _explicitProps: ['color', 'opacity', 'transparent'],
+          } as NonNullable<
+            Parameters<typeof highlighter.setup>[0]
+          >['selectMaterialDefinition'],
         });
         highlighter.styles.set('measure-volume', {
           color: new THREE.Color(0x10b981),
           renderedFaces: 0,
           opacity: 0.82,
           transparent: true,
-        });
+          preserveOriginalMaterial: true,
+          priority: 20,
+          _explicitProps: ['color', 'opacity', 'transparent'],
+        } as Parameters<typeof highlighter.styles.set>[1]);
         highlighter.styles.set('measure-volume-hover', {
           color: new THREE.Color(0x38bdf8),
           renderedFaces: 0,
           opacity: 0.45,
           transparent: true,
-        });
+          preserveOriginalMaterial: true,
+          priority: 20,
+          _explicitProps: ['color', 'opacity', 'transparent'],
+        } as Parameters<typeof highlighter.styles.set>[1]);
+
+        // Serializa updateColors y aplica solo diferencias por elemento (sin reset global)
+        // para evitar parpadeos en elementos con apariencia personalizada al seleccionar otros.
+        let colorUpdateInFlight = false;
+        let colorUpdatePending = false;
+        let colorUpdateWaiters: Array<() => void> = [];
+        const appliedStylesByModel = new Map<
+          string,
+          { model: FRAGS.FragmentsModel; items: Map<number, string> }
+        >();
+
+        const runSerializedUpdateColors = async () => {
+          const fragmentsManager = components.get(OBC.FragmentsManager);
+
+          for (const [modelId, entry] of Array.from(
+            appliedStylesByModel.entries()
+          )) {
+            if (fragmentsManager.list.get(modelId) !== entry.model) {
+              appliedStylesByModel.delete(modelId);
+            }
+          }
+
+          const getStylePriority = (styleName: string) => {
+            const style = highlighter.styles.get(styleName) as
+              | { priority?: number }
+              | undefined;
+            if (style?.priority !== undefined) return style.priority;
+            return styleName === highlighter.config.selectName
+              ? Number.MAX_SAFE_INTEGER
+              : 0;
+          };
+          const selectionKeys = Object.keys(highlighter.selection);
+          const stylesByPriority = [...selectionKeys].sort((a, b) => {
+            const pa = getStylePriority(a);
+            const pb = getStylePriority(b);
+            return pa !== pb
+              ? pb - pa
+              : selectionKeys.indexOf(b) - selectionKeys.indexOf(a);
+          });
+
+          const styleDefinitions = new Map<string, Record<string, unknown>>();
+          const desiredStylesByModel = new Map<string, Map<number, string>>();
+
+          for (const styleName of stylesByPriority) {
+            const styleDef = highlighter.styles.get(styleName);
+            const rawMap = highlighter.selection[styleName];
+            if (!styleDef || !rawMap) continue;
+            const { priority: _priority, ...materialProps } =
+              styleDef as Record<string, unknown> & { priority?: number };
+            styleDefinitions.set(styleName, materialProps);
+
+            for (const [modelId, rawIds] of Object.entries(rawMap)) {
+              if (!fragmentsManager.list.has(modelId)) continue;
+              let desiredItems = desiredStylesByModel.get(modelId);
+              if (!desiredItems) {
+                desiredItems = new Map<number, string>();
+                desiredStylesByModel.set(modelId, desiredItems);
+              }
+              for (const localId of rawIds) {
+                if (
+                  typeof localId === 'number' &&
+                  Number.isFinite(localId) &&
+                  !desiredItems.has(localId)
+                ) {
+                  desiredItems.set(localId, styleName);
+                }
+              }
+              if (desiredItems.size === 0) {
+                desiredStylesByModel.delete(modelId);
+              }
+            }
+          }
+
+          const toHighlightByStyle = new Map<string, OBC.ModelIdMap>();
+          const toReset: OBC.ModelIdMap = {};
+          let hasResets = false;
+
+          const allModelIds = new Set([
+            ...appliedStylesByModel.keys(),
+            ...desiredStylesByModel.keys(),
+          ]);
+
+          for (const modelId of allModelIds) {
+            const prevItems = appliedStylesByModel.get(modelId)?.items;
+            const nextItems = desiredStylesByModel.get(modelId);
+
+            if (prevItems) {
+              for (const [localId] of prevItems) {
+                if (!nextItems || !nextItems.has(localId)) {
+                  if (!toReset[modelId]) {
+                    toReset[modelId] = new Set<number>();
+                  }
+                  toReset[modelId].add(localId);
+                  hasResets = true;
+                }
+              }
+            }
+
+            if (nextItems) {
+              for (const [localId, nextStyle] of nextItems) {
+                if (prevItems?.get(localId) !== nextStyle) {
+                  let styleMap = toHighlightByStyle.get(nextStyle);
+                  if (!styleMap) {
+                    styleMap = {};
+                    toHighlightByStyle.set(nextStyle, styleMap);
+                  }
+                  if (!styleMap[modelId]) {
+                    styleMap[modelId] = new Set<number>();
+                  }
+                  styleMap[modelId].add(localId);
+                }
+              }
+            }
+          }
+
+          if (toHighlightByStyle.size === 0 && !hasResets) {
+            return;
+          }
+
+          if (toHighlightByStyle.size > 0) {
+            await Promise.allSettled(
+              Array.from(toHighlightByStyle.entries()).map(([styleName, map]) =>
+                fragmentsManager.highlight(
+                  {
+                    ...styleDefinitions.get(styleName)!,
+                    customId: styleName,
+                  } as Parameters<typeof fragmentsManager.highlight>[0],
+                  map
+                )
+              )
+            );
+          }
+
+          if (hasResets) {
+            await fragmentsManager.resetHighlight(toReset);
+          }
+
+          appliedStylesByModel.clear();
+          for (const [modelId, items] of desiredStylesByModel) {
+            const model = fragmentsManager.list.get(modelId);
+            if (model && items.size > 0) {
+              appliedStylesByModel.set(modelId, { model, items });
+            }
+          }
+
+          if (
+            highlighter.config.autoUpdateFragments &&
+            fragmentsManager.initialized
+          ) {
+            await fragmentsManager.core.update(true);
+          }
+
+          world.renderer?.update();
+        };
+
+        highlighter.updateColors = async () => {
+          if (colorUpdateInFlight) {
+            colorUpdatePending = true;
+            return new Promise<void>((resolve) => {
+              colorUpdateWaiters.push(resolve);
+            });
+          }
+
+          colorUpdateInFlight = true;
+          try {
+            do {
+              colorUpdatePending = false;
+              const cycleWaiters = colorUpdateWaiters;
+              colorUpdateWaiters = [];
+              try {
+                await runSerializedUpdateColors();
+              } finally {
+                for (const resolve of cycleWaiters) {
+                  resolve();
+                }
+              }
+            } while (colorUpdatePending);
+          } finally {
+            colorUpdateInFlight = false;
+            const remaining = colorUpdateWaiters;
+            colorUpdateWaiters = [];
+            for (const resolve of remaining) {
+              resolve();
+            }
+          }
+        };
 
         const syncHighlighterSelection = async (rawSelection?: OBC.ModelIdMap) => {
           const requestId = ++selectionRequestIdRef.current;
@@ -1380,24 +1670,62 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
           const elementStr = String(primaryExpressId);
           setSelectedElements(normalizedMap, elementStr, primaryModelId, null);
+
+          const totalSelectedCount = Object.values(normalizedMap).reduce(
+            (sum, arr) => sum + arr.length,
+            0,
+          );
+          // Let Highlighter.updateColors() flush its worker update first so 3D highlight is immediate
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+          if (
+            requestId !== selectionRequestIdRef.current ||
+            sessionId !== initSessionRef.current
+          ) {
+            return;
+          }
+
           let props: Record<string, any> | null = null;
           try {
             const allItems: Record<string, unknown>[] = [];
             const SELECTION_PROPS_CHUNK_SIZE = 200;
+            const SELECTION_PROPS_MAX_ITEMS = 600;
+            const itemsDataConfig =
+              totalSelectedCount > SELECTION_PROPS_MAX_ITEMS
+                ? {
+                  attributesDefault: true,
+                  relationsDefault: { attributes: false, relations: false },
+                }
+                : undefined;
 
             for (const [modelId, ids] of Object.entries(normalizedMap)) {
+              if (allItems.length >= SELECTION_PROPS_MAX_ITEMS) break;
               const model = fragments.list.get(modelId);
               if (!model) continue;
 
-              for (let i = 0; i < ids.length; i += SELECTION_PROPS_CHUNK_SIZE) {
+              const remainingBudget = SELECTION_PROPS_MAX_ITEMS - allItems.length;
+              const targetIds =
+                ids.length > remainingBudget
+                  ? ids.slice(0, remainingBudget)
+                  : ids;
+
+              for (
+                let i = 0;
+                i < targetIds.length;
+                i += SELECTION_PROPS_CHUNK_SIZE
+              ) {
                 if (
                   requestId !== selectionRequestIdRef.current ||
                   sessionId !== initSessionRef.current
                 ) {
                   return;
                 }
-                const chunkIds = ids.slice(i, i + SELECTION_PROPS_CHUNK_SIZE);
-                const chunkData = await model.getItemsData(chunkIds);
+                const chunkIds = targetIds.slice(
+                  i,
+                  i + SELECTION_PROPS_CHUNK_SIZE,
+                );
+                const chunkData = itemsDataConfig
+                  ? await model.getItemsData(chunkIds, itemsDataConfig)
+                  : await model.getItemsData(chunkIds);
                 for (const item of chunkData) {
                   if (item && typeof item === 'object') {
                     allItems.push(item as Record<string, unknown>);
@@ -1406,12 +1734,12 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
               }
             }
 
-            if (allItems.length === 1) {
+            if (allItems.length === 1 && totalSelectedCount === 1) {
               props = allItems[0];
-            } else if (allItems.length > 1) {
+            } else if (allItems.length > 0) {
               props = mergeMultipleElementProperties(
                 allItems,
-                allItems.length,
+                totalSelectedCount,
               );
             }
           } catch (e) {
@@ -1430,10 +1758,12 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
         // Listen for selection changes
         highlighter.events.select.onHighlight.add((selection: OBC.ModelIdMap) => {
+          restoreSelectHighlightPriority(highlighter);
           void syncHighlighterSelection(highlighter.selection.select || selection);
         });
 
         highlighter.events.select.onClear.add(() => {
+          restoreSelectHighlightPriority(highlighter);
           void syncHighlighterSelection(highlighter.selection.select || {});
         });
 
@@ -1823,6 +2153,9 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     volumeMetricCacheRef.current.clear();
     pointerOrbitCleanupRef.current?.();
     pointerOrbitCleanupRef.current = null;
+    modelElementIdsCacheRef.current.clear();
+    appearanceSyncInFlightRef.current = false;
+    appearanceSyncPendingRef.current = null;
     measureOverlayRef.current?.dispose();
     measureOverlayRef.current = null;
     setMeasurementCount(0);
@@ -1831,6 +2164,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setStoreSectionGizmosVisible(true);
     setStoreCameraProjection('Perspective');
     clearLoadedModels();
+    clearCustomAppearances();
     if (componentsRef.current) {
       try {
         componentsRef.current.dispose();
@@ -1846,11 +2180,123 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       gridRef.current = null;
     }
   }, [
+    clearCustomAppearances,
     clearLoadedModels,
     setStoreCameraProjection,
     setStoreSectionActive,
     setStoreSectionGizmosVisible,
   ]);
+
+  const syncCustomAppearancesToHighlighter = useCallback(
+    async (suppressSelectOverlay: boolean) => {
+      appearanceSyncPendingRef.current = { suppressSelectOverlay };
+      if (appearanceSyncInFlightRef.current) return;
+
+      appearanceSyncInFlightRef.current = true;
+      try {
+        while (appearanceSyncPendingRef.current) {
+          const { suppressSelectOverlay: nextSuppress } =
+            appearanceSyncPendingRef.current;
+          appearanceSyncPendingRef.current = null;
+
+          const highlighter = highlighterRef.current;
+          const fragments = fragmentsRef.current;
+          if (!highlighter || !fragments || !fragments.initialized) {
+            continue;
+          }
+
+          const selectStyle = highlighter.styles.get('select') as
+            | (Record<string, unknown> & { priority?: number })
+            | undefined;
+          if (selectStyle) {
+            if (nextSuppress) {
+              selectStyle.priority = 5;
+            } else {
+              delete selectStyle.priority;
+            }
+          }
+
+          for (const key of Array.from(highlighter.styles.keys())) {
+            if (key.startsWith(CUSTOM_APPEARANCE_PREFIX)) {
+              highlighter.selection[key] = {};
+            }
+          }
+          for (const key of Object.keys(highlighter.selection)) {
+            if (key.startsWith(CUSTOM_APPEARANCE_PREFIX)) {
+              highlighter.selection[key] = {};
+            }
+          }
+
+          const appearancesMap =
+            useViewerStore.getState().customAppearancesMap;
+          const buckets = new Map<
+            string,
+            {
+              color?: string;
+              opacity?: number;
+              items: OBC.ModelIdMap;
+            }
+          >();
+
+          for (const [modelId, modelOverrides] of Object.entries(
+            appearancesMap
+          )) {
+            if (!modelOverrides || !fragments.list.has(modelId)) continue;
+            for (const [rawId, override] of Object.entries(modelOverrides)) {
+              const localId = Number(rawId);
+              if (!Number.isFinite(localId)) continue;
+              if (!override.color && override.opacity === undefined) continue;
+
+              const colorPart = override.color ?? 'orig';
+              const opacityPart =
+                override.opacity !== undefined
+                  ? String(Math.round(override.opacity * 100))
+                  : 'orig';
+              const styleKey = `${CUSTOM_APPEARANCE_PREFIX}${colorPart}:${opacityPart}`;
+
+              let bucket = buckets.get(styleKey);
+              if (!bucket) {
+                bucket = {
+                  color: override.color,
+                  opacity: override.opacity,
+                  items: {},
+                };
+                buckets.set(styleKey, bucket);
+              }
+              if (!bucket.items[modelId]) {
+                bucket.items[modelId] = new Set<number>();
+              }
+              bucket.items[modelId].add(localId);
+            }
+          }
+
+          for (const [styleKey, bucket] of buckets) {
+            if (!bucket.color && bucket.opacity === undefined) continue;
+
+            if (!highlighter.styles.has(styleKey)) {
+              highlighter.styles.set(styleKey, {
+                color: bucket.color ? new THREE.Color(bucket.color) : undefined,
+                renderedFaces: 0,
+                opacity: bucket.opacity,
+                transparent:
+                  bucket.opacity !== undefined ? bucket.opacity < 1 : undefined,
+                preserveOriginalMaterial: true,
+                priority: 10,
+                _explicitProps: ['color', 'opacity', 'transparent'],
+              } as unknown as Parameters<typeof highlighter.styles.set>[1]);
+            }
+            highlighter.selection[styleKey] = bucket.items;
+          }
+
+          await highlighter.updateColors();
+          worldRef.current?.renderer?.update();
+        }
+      } finally {
+        appearanceSyncInFlightRef.current = false;
+      }
+    },
+    []
+  );
 
   const fitBoxAtAngles = useCallback(
     async (
@@ -1880,19 +2326,19 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           (Math.abs(right.x) * halfSize.x +
             Math.abs(right.y) * halfSize.y +
             Math.abs(right.z) * halfSize.z) *
-            2 +
+          2 +
           4;
         const spanY =
           (Math.abs(viewUp.x) * halfSize.x +
             Math.abs(viewUp.y) * halfSize.y +
             Math.abs(viewUp.z) * halfSize.z) *
-            2 +
+          2 +
           4;
         const spanZ =
           (Math.abs(normal.x) * halfSize.x +
             Math.abs(normal.y) * halfSize.y +
             Math.abs(normal.z) * halfSize.z) *
-            2;
+          2;
 
         if (camera instanceof THREE.OrthographicCamera) {
           const minClearance = Math.max(size.x, size.y, size.z) * 1.5 + 10;
@@ -1983,6 +2429,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           model.useClippingPlanes(world.renderer.clippingPlanes);
         }
         await fragments.core.update(true);
+        modelElementIdsCacheRef.current.delete(modelId);
 
         addLoadedModel({
           id: modelId,
@@ -2080,12 +2527,14 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             volumeMetricCacheRef.current.delete(cachedKey);
           }
         }
+        modelElementIdsCacheRef.current.delete(modelId);
         world.scene.three.remove(model.object);
         await fragments.core.disposeModel(modelId);
         removeLoadedModel(modelId);
+        void syncCustomAppearancesToHighlighter(false);
       }
     },
-    [removeLoadedModel]
+    [removeLoadedModel, syncCustomAppearancesToHighlighter]
   );
 
   const fitCameraToModels = useCallback(async () => {
@@ -2329,8 +2778,29 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     [setSelectedElements]
   );
 
+  const getModelElementIds = useCallback(
+    async (modelId: string): Promise<number[]> => {
+      const fragments = fragmentsRef.current;
+      if (!fragments || !fragments.initialized) return [];
+      const model = fragments.list.get(modelId);
+      if (!model) return [];
+
+      const cached = modelElementIdsCacheRef.current.get(modelId);
+      if (cached && cached.length > 0) {
+        return cached;
+      }
+
+      const ids = await collectModelElementIds(model);
+      if (ids.length > 0) {
+        modelElementIdsCacheRef.current.set(modelId, ids);
+      }
+      return ids;
+    },
+    []
+  );
+
   const selectModelElements = useCallback(
-    async (modelId: string, additive = false) => {
+    async (modelId: string, additive = false, zoomToSelection = false) => {
       const fragments = fragmentsRef.current;
       const highlighter = highlighterRef.current;
       if (!fragments || !highlighter || !fragments.initialized) return;
@@ -2338,32 +2808,31 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       const model = fragments.list.get(modelId);
       if (!model || !model.object.visible) return;
 
-      let localIds = await model
-        .getItemsIdsWithGeometry()
-        .catch(() => [] as number[]);
-      if (!localIds || localIds.length === 0) {
-        localIds = await model.getLocalIds().catch(() => [] as number[]);
+      const currentTool = useViewerStore.getState().activeTool;
+      if (
+        currentTool === 'measure' ||
+        currentTool === 'section' ||
+        currentTool === 'coordinates'
+      ) {
+        setStoreActiveTool('select');
       }
 
-      const hiddenIds = useViewerStore.getState().hiddenElementsMap[modelId];
-      if (hiddenIds && hiddenIds.length > 0) {
-        const hiddenSet = new Set(hiddenIds);
-        const visibleIds = localIds.filter((id) => !hiddenSet.has(id));
-        if (visibleIds.length > 0) {
-          localIds = visibleIds;
-        }
-      }
-
-      if (!localIds || localIds.length === 0) return;
+      const localIds = await getModelElementIds(modelId);
+      if (localIds.length === 0) return;
 
       if (additive) {
-        await toggleSelectionMap({ [modelId]: localIds }, false);
+        await toggleSelectionMap({ [modelId]: localIds }, zoomToSelection);
       } else {
-        await focusSelectionMap({ [modelId]: localIds }, false);
+        await focusSelectionMap({ [modelId]: localIds }, zoomToSelection);
       }
       await fragments.core.update(true);
     },
-    [focusSelectionMap, toggleSelectionMap]
+    [
+      focusSelectionMap,
+      getModelElementIds,
+      setStoreActiveTool,
+      toggleSelectionMap,
+    ]
   );
 
   const selectElementsInScreenRect = useCallback(
@@ -2478,6 +2947,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const clearSelection = useCallback(async () => {
     selectionRequestIdRef.current++;
     if (highlighterRef.current) {
+      restoreSelectHighlightPriority(highlighterRef.current);
       await highlighterRef.current.clear('select');
     }
     setSelectedElements({}, null, null, null);
@@ -2593,6 +3063,110 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     clearHiddenElements();
     showAllStoreModels();
   }, [clearHiddenElements, showAllStoreModels]);
+
+  const updateSelectedElementsAppearance = useCallback(
+    async (
+      updater: (
+        prev: ElementAppearanceOverride | undefined
+      ) => ElementAppearanceOverride | null,
+      suppressSelectOverlay = true
+    ) => {
+      const { selectedElementsMap, customAppearancesMap } =
+        useViewerStore.getState();
+      const nextMap: Record<
+        string,
+        Record<number, ElementAppearanceOverride>
+      > = {};
+
+      for (const [mId, overrides] of Object.entries(customAppearancesMap)) {
+        if (overrides && Object.keys(overrides).length > 0) {
+          nextMap[mId] = { ...overrides };
+        }
+      }
+
+      let changed = false;
+      for (const [modelId, localIds] of Object.entries(selectedElementsMap)) {
+        if (!localIds || localIds.length === 0) continue;
+        const modelOverrides = nextMap[modelId] ?? {};
+        for (const id of localIds) {
+          const prev = modelOverrides[id];
+          const updated = updater(prev);
+          if (
+            !updated ||
+            (!updated.color && updated.opacity === undefined)
+          ) {
+            if (id in modelOverrides) {
+              delete modelOverrides[id];
+              changed = true;
+            }
+          } else if (
+            prev?.color !== updated.color ||
+            prev?.opacity !== updated.opacity
+          ) {
+            modelOverrides[id] = updated;
+            changed = true;
+          }
+        }
+        if (Object.keys(modelOverrides).length > 0) {
+          nextMap[modelId] = modelOverrides;
+        } else {
+          delete nextMap[modelId];
+        }
+      }
+
+      if (!changed) return;
+      setCustomAppearances(nextMap);
+      await syncCustomAppearancesToHighlighter(suppressSelectOverlay);
+    },
+    [setCustomAppearances, syncCustomAppearancesToHighlighter]
+  );
+
+  const setSelectedElementsColor = useCallback(
+    async (hexColor: string | null) => {
+      const normalizedColor = hexColor ? hexColor.toLowerCase() : null;
+      await updateSelectedElementsAppearance((prev) => {
+        if (!normalizedColor) {
+          if (prev?.opacity === undefined) return null;
+          return { opacity: prev.opacity };
+        }
+        return {
+          ...(prev?.opacity !== undefined ? { opacity: prev.opacity } : {}),
+          color: normalizedColor,
+        };
+      }, true);
+    },
+    [updateSelectedElementsAppearance]
+  );
+
+  const setSelectedElementsTransparency = useCallback(
+    async (transparencyPct: number | null) => {
+      const nextOpacity =
+        transparencyPct === null
+          ? undefined
+          : Math.round(100 - Math.max(0, Math.min(90, transparencyPct))) / 100;
+
+      await updateSelectedElementsAppearance((prev) => {
+        if (nextOpacity === undefined) {
+          if (!prev?.color) return null;
+          return { color: prev.color };
+        }
+        return {
+          ...(prev?.color ? { color: prev.color } : {}),
+          opacity: nextOpacity,
+        };
+      }, true);
+    },
+    [updateSelectedElementsAppearance]
+  );
+
+  const resetSelectedElementsAppearance = useCallback(async () => {
+    await updateSelectedElementsAppearance(() => null, false);
+  }, [updateSelectedElementsAppearance]);
+
+  const resetAllCustomAppearances = useCallback(async () => {
+    clearCustomAppearances();
+    await syncCustomAppearancesToHighlighter(false);
+  }, [clearCustomAppearances, syncCustomAppearancesToHighlighter]);
 
   const captureSnapshotBlob = useCallback(async (): Promise<Blob | null> => {
     const world = worldRef.current;
@@ -3781,10 +4355,22 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
       // 1. Clear highlighters
       if (highlighterRef.current) {
+        restoreSelectHighlightPriority(highlighterRef.current);
+        for (const key of Array.from(highlighterRef.current.styles.keys())) {
+          if (key.startsWith(CUSTOM_APPEARANCE_PREFIX)) {
+            highlighterRef.current.selection[key] = {};
+          }
+        }
+        for (const key of Object.keys(highlighterRef.current.selection)) {
+          if (key.startsWith(CUSTOM_APPEARANCE_PREFIX)) {
+            highlighterRef.current.selection[key] = {};
+          }
+        }
         await highlighterRef.current.clear('select').catch(() => { });
         await highlighterRef.current.clear('measure-volume').catch(() => { });
         await highlighterRef.current.clear('measure-volume-hover').catch(() => { });
       }
+      clearCustomAppearances();
 
       // 2. Clear clipper planes
       if (clipperRef.current) {
@@ -3872,6 +4458,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
     void syncEngineToProject();
   }, [
+    clearCustomAppearances,
     clearMeasurements,
     currentProjectId,
     fitBoxAtAngles,
@@ -4466,6 +5053,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         focusElements,
         focusSelectionMap,
         toggleSelectionMap,
+        getModelElementIds,
         selectModelElements,
         selectElementsInScreenRect,
         clearSelection,
@@ -4473,6 +5061,10 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         toggleHideSelectedElements,
         isolateSelectedElements,
         showAllElements,
+        setSelectedElementsColor,
+        setSelectedElementsTransparency,
+        resetSelectedElementsAppearance,
+        resetAllCustomAppearances,
         captureSnapshotBlob,
         getCameraViewpoint,
         setCameraViewpoint,

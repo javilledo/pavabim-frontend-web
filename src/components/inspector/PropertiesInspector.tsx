@@ -1,6 +1,7 @@
 import React from 'react';
 import { useViewerStore } from '../../store/useViewerStore';
 import { useEngine } from '../../viewer/EngineContext';
+import { SelectionAppearanceControls } from '../viewer/SelectionAppearanceControls';
 
 const VARIOS_FLAG = '__pavabimVarios';
 
@@ -165,6 +166,14 @@ export const PropertiesInspector: React.FC = () => {
             ))}
           </div>
         )}
+      </div>
+
+      {/* Selected Elements Appearance */}
+      <div className="bg-asphalt-950/50 border border-asphalt-700 rounded-md p-2.5">
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-pavasal-400">
+          Apariencia de selección
+        </div>
+        <SelectionAppearanceControls compact />
       </div>
 
       {/* Attributes */}

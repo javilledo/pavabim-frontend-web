@@ -10,6 +10,16 @@ import { useViewerStore, type LoadedModel } from '../../store/useViewerStore';
 import type { ModelStatusResponse } from '../../types/api.types';
 import { useEngine } from '../../viewer/EngineContext';
 
+const CONTEXT_MENU_WIDTH = 176;
+const CONTEXT_MENU_HEIGHT = 44;
+
+interface ModelContextMenuState {
+  x: number;
+  y: number;
+  modelId: string;
+  modelName: string;
+}
+
 const STATUS_DOT: Record<
   ModelStatusResponse['status'],
   { color: string; label: string }
@@ -25,6 +35,21 @@ const STATUS_DOT: Record<
   },
   FAILED: { color: 'bg-red-400', label: 'Error al convertir' },
 };
+
+function getModelCardClassName(
+  canSelect: boolean,
+  isFullySelected: boolean,
+  isPartiallySelected: boolean,
+): string {
+  const base = canSelect
+    ? isFullySelected
+      ? 'bg-pavasal-500/20 border-pavasal-500/60'
+      : isPartiallySelected
+        ? 'border-pavasal-500/35 bg-asphalt-800/70 hover:border-pavasal-500/60 hover:bg-asphalt-800'
+        : 'border-asphalt-700/80 bg-asphalt-800/60 hover:border-pavasal-500/50 hover:bg-asphalt-800'
+    : 'border-asphalt-700/80 bg-asphalt-800/60';
+  return `rounded border px-2 py-1.5 transition-colors ${base}${canSelect ? ' cursor-pointer select-none' : ''}`;
+}
 
 export const ModelsPanel: React.FC = () => {
   const queryClient = useQueryClient();
@@ -42,6 +67,7 @@ export const ModelsPanel: React.FC = () => {
     toggleModelVisibility,
     removeModel,
     fitCameraToModels,
+    getModelElementIds,
     selectModelElements,
   } = useEngine();
 
@@ -51,6 +77,109 @@ export const ModelsPanel: React.FC = () => {
     total: number;
   } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [modelElementCounts, setModelElementCounts] = useState<
+    Record<string, number>
+  >({});
+  const [contextMenu, setContextMenu] = useState<ModelContextMenuState | null>(
+    null,
+  );
+
+  const visibleModelIdsKey = useMemo(
+    () =>
+      loadedModels
+        .filter((m) => m.visible)
+        .map((m) => m.id)
+        .join('|'),
+    [loadedModels],
+  );
+
+  useEffect(() => {
+    let active = true;
+
+    const loadVisibleModelCounts = async () => {
+      if (!isEngineReady) {
+        setModelElementCounts({});
+        return;
+      }
+
+      const visibleModels = useViewerStore
+        .getState()
+        .loadedModels.filter((m) => m.visible);
+      if (visibleModels.length === 0) {
+        setModelElementCounts({});
+        return;
+      }
+
+      const entries = await Promise.all(
+        visibleModels.map(async (m) => {
+          const ids = await getModelElementIds(m.id);
+          return [m.id, ids.length] as const;
+        }),
+      );
+
+      if (!active) return;
+      const nextCounts: Record<string, number> = {};
+      for (const [id, count] of entries) {
+        nextCounts[id] = count;
+      }
+      setModelElementCounts(nextCounts);
+    };
+
+    void loadVisibleModelCounts();
+    return () => {
+      active = false;
+    };
+  }, [getModelElementIds, isEngineReady, visibleModelIdsKey]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+
+    const closeMenu = () => setContextMenu(null);
+    const handlePointerDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('[data-model-context-menu]')) return;
+      closeMenu();
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeMenu();
+      }
+    };
+
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('scroll', closeMenu, true);
+    window.addEventListener('resize', closeMenu);
+    window.addEventListener('blur', closeMenu);
+
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('scroll', closeMenu, true);
+      window.removeEventListener('resize', closeMenu);
+      window.removeEventListener('blur', closeMenu);
+    };
+  }, [contextMenu]);
+
+  const openModelContextMenu = (
+    e: React.MouseEvent,
+    modelId: string,
+    modelName: string,
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    void selectModelElements(modelId, false, false);
+
+    const maxX = Math.max(8, window.innerWidth - CONTEXT_MENU_WIDTH - 8);
+    const maxY = Math.max(8, window.innerHeight - CONTEXT_MENU_HEIGHT - 8);
+    setContextMenu({
+      x: Math.min(Math.max(8, e.clientX), maxX),
+      y: Math.min(Math.max(8, e.clientY), maxY),
+      modelId,
+      modelName,
+    });
+  };
 
   const projectId = currentProject?.id || '';
 
@@ -137,8 +266,15 @@ export const ModelsPanel: React.FC = () => {
 
   const renderLocalModelCard = (localModel: LoadedModel) => {
     const canSelect = isEngineReady && localModel.visible;
-    const selectedCountForModel = selectedElementsMap[localModel.id]?.length ?? 0;
-    const isModelSelected = selectedCountForModel > 0;
+    const selectedCount = selectedElementsMap[localModel.id]?.length ?? 0;
+    const totalElements = modelElementCounts[localModel.id] ?? 0;
+    const isFullySelected =
+      canSelect &&
+      (totalElements > 0
+        ? selectedCount >= totalElements
+        : selectedCount > 0);
+    const isPartiallySelected =
+      canSelect && !isFullySelected && selectedCount > 0;
 
     return (
       <div
@@ -148,6 +284,11 @@ export const ModelsPanel: React.FC = () => {
         onClick={
           canSelect
             ? (e) => void selectModelElements(localModel.id, e.ctrlKey || e.metaKey)
+            : undefined
+        }
+        onContextMenu={
+          canSelect
+            ? (e) => openModelContextMenu(e, localModel.id, localModel.name)
             : undefined
         }
         onKeyDown={
@@ -165,16 +306,14 @@ export const ModelsPanel: React.FC = () => {
         }
         title={
           canSelect
-            ? 'Clic para seleccionar todos los elementos del modelo · Ctrl + clic para sumar/alternar'
+            ? `Clic para seleccionar todos los elementos del modelo${totalElements > 0 ? ` (${totalElements})` : ''} · Ctrl + clic para sumar/alternar · Clic derecho para Zoom`
             : undefined
         }
-        className={`rounded border px-2 py-1.5 transition-colors ${
-          isModelSelected
-            ? 'border-pavasal-500/70 bg-pavasal-500/15'
-            : canSelect
-              ? 'border-asphalt-700/80 bg-asphalt-800/60 hover:border-pavasal-500/50 hover:bg-asphalt-800'
-              : 'border-asphalt-700/80 bg-asphalt-800/60'
-        } ${canSelect ? 'cursor-pointer' : ''}`}
+        className={getModelCardClassName(
+          canSelect,
+          isFullySelected,
+          isPartiallySelected,
+        )}
       >
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 min-w-0 flex-1">
@@ -189,13 +328,37 @@ export const ModelsPanel: React.FC = () => {
               }
             />
             <span
-              className={`truncate text-[11px] font-medium ${
-                localModel.visible ? 'text-asphalt-100' : 'text-asphalt-400'
+              className={`truncate text-[11px] ${
+                isFullySelected
+                  ? 'font-semibold text-pavasal-300'
+                  : localModel.visible
+                    ? 'font-medium text-asphalt-100'
+                    : 'font-medium text-asphalt-400'
               }`}
               title={localModel.name}
             >
               {localModel.name}
             </span>
+            {canSelect && totalElements > 0 && (
+              <span
+                className={`text-[10px] font-mono shrink-0 ${
+                  isFullySelected
+                    ? 'text-pavasal-300'
+                    : isPartiallySelected
+                      ? 'text-pavasal-400'
+                      : 'text-asphalt-400'
+                }`}
+                title={
+                  isPartiallySelected
+                    ? `${selectedCount} de ${totalElements} elementos seleccionados`
+                    : `${totalElements} elementos con geometría`
+                }
+              >
+                {isPartiallySelected
+                  ? `${selectedCount}/${totalElements}`
+                  : totalElements}
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
@@ -298,6 +461,47 @@ export const ModelsPanel: React.FC = () => {
     );
   };
 
+  const contextMenuNode = contextMenu ? (
+    <div
+      data-model-context-menu
+      role="menu"
+      style={{
+        left: contextMenu.x,
+        top: contextMenu.y,
+        width: CONTEXT_MENU_WIDTH,
+      }}
+      onContextMenu={(e) => e.preventDefault()}
+      className="fixed z-50 rounded-md border border-asphalt-700 bg-asphalt-900/95 p-1 shadow-xl backdrop-blur-sm"
+    >
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          const targetId = contextMenu.modelId;
+          setContextMenu(null);
+          void selectModelElements(targetId, false, true);
+        }}
+        title={`Hacer zoom a ${contextMenu.modelName}`}
+        className="flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-xs font-medium text-asphalt-100 transition-colors hover:bg-pavasal-500/20 hover:text-pavasal-300"
+      >
+        <svg
+          className="h-3.5 w-3.5 shrink-0 text-pavasal-400"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="11" cy="11" r="7" />
+          <path d="m21 21-4.35-4.35" />
+          <path d="M11 8v6M8 11h6" />
+        </svg>
+        <span>Zoom a objeto</span>
+      </button>
+    </div>
+  ) : null;
+
   if (!user || !currentProject) {
     if (localLoadedModels.length > 0) {
       return (
@@ -312,6 +516,7 @@ export const ModelsPanel: React.FC = () => {
               renderLocalModelCard(localModel),
             )}
           </div>
+          {contextMenuNode}
         </div>
       );
     }
@@ -542,9 +747,19 @@ export const ModelsPanel: React.FC = () => {
                   : 'Cargar modelo en el visor 3D';
 
             const canSelectModel = Boolean(loadedModel && isVisible);
-            const isModelSelected = Boolean(
-              loadedModel && (selectedElementsMap[loadedModel.id]?.length ?? 0) > 0,
-            );
+            const selectedCount = loadedModel
+              ? (selectedElementsMap[loadedModel.id]?.length ?? 0)
+              : 0;
+            const totalElements = loadedModel
+              ? (modelElementCounts[loadedModel.id] ?? 0)
+              : 0;
+            const isFullySelected =
+              canSelectModel &&
+              (totalElements > 0
+                ? selectedCount >= totalElements
+                : selectedCount > 0);
+            const isPartiallySelected =
+              canSelectModel && !isFullySelected && selectedCount > 0;
 
             return (
               <div
@@ -558,6 +773,12 @@ export const ModelsPanel: React.FC = () => {
                           loadedModel.id,
                           e.ctrlKey || e.metaKey,
                         )
+                    : undefined
+                }
+                onContextMenu={
+                  canSelectModel && loadedModel
+                    ? (e) =>
+                        openModelContextMenu(e, loadedModel.id, model.modelName)
                     : undefined
                 }
                 onKeyDown={
@@ -575,16 +796,14 @@ export const ModelsPanel: React.FC = () => {
                 }
                 title={
                   canSelectModel
-                    ? 'Clic para seleccionar todos los elementos del modelo · Ctrl + clic para sumar/alternar'
+                    ? `Clic para seleccionar todos los elementos del modelo${totalElements > 0 ? ` (${totalElements})` : ''} · Ctrl + clic para sumar/alternar · Clic derecho para Zoom`
                     : undefined
                 }
-                className={`rounded border px-2 py-1.5 space-y-1 transition-colors ${
-                  isModelSelected
-                    ? 'border-pavasal-500/70 bg-pavasal-500/15'
-                    : canSelectModel
-                      ? 'border-asphalt-700/80 bg-asphalt-800/60 hover:border-pavasal-500/50 hover:bg-asphalt-800'
-                      : 'border-asphalt-700/80 bg-asphalt-800/60'
-                } ${canSelectModel ? 'cursor-pointer' : ''}`}
+                className={`${getModelCardClassName(
+                  canSelectModel,
+                  isFullySelected,
+                  isPartiallySelected,
+                )} space-y-1`}
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-1.5 min-w-0 flex-1">
@@ -593,15 +812,37 @@ export const ModelsPanel: React.FC = () => {
                       title={statusInfo.label}
                     />
                     <span
-                      className={`truncate text-[11px] font-medium ${
-                        isLoaded && !isVisible
-                          ? 'text-asphalt-400'
-                          : 'text-asphalt-100'
+                      className={`truncate text-[11px] ${
+                        isFullySelected
+                          ? 'font-semibold text-pavasal-300'
+                          : isLoaded && !isVisible
+                            ? 'font-medium text-asphalt-400'
+                            : 'font-medium text-asphalt-100'
                       }`}
                       title={model.modelName}
                     >
                       {model.modelName}
                     </span>
+                    {canSelectModel && totalElements > 0 && (
+                      <span
+                        className={`text-[10px] font-mono shrink-0 ${
+                          isFullySelected
+                            ? 'text-pavasal-300'
+                            : isPartiallySelected
+                              ? 'text-pavasal-400'
+                              : 'text-asphalt-400'
+                        }`}
+                        title={
+                          isPartiallySelected
+                            ? `${selectedCount} de ${totalElements} elementos seleccionados`
+                            : `${totalElements} elementos con geometría`
+                        }
+                      >
+                        {isPartiallySelected
+                          ? `${selectedCount}/${totalElements}`
+                          : totalElements}
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-1 shrink-0">
@@ -852,6 +1093,7 @@ export const ModelsPanel: React.FC = () => {
           </div>
         </div>
       )}
+      {contextMenuNode}
     </div>
   );
 };
