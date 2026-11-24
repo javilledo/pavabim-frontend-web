@@ -8,6 +8,8 @@ export interface ProjectRolePermissions {
   role: ResolvedRole;
   isSuperAdmin: boolean;
   isAdmin: boolean;
+  hasAdminProject: boolean;
+  canAccessAdminPanel: boolean;
   canCreateProject: boolean;
   canManageProject: boolean;
   canRenameProject: boolean;
@@ -30,6 +32,12 @@ export function useProjectRole(): ProjectRolePermissions {
     Boolean(user?.isSuperAdmin) ||
     currentProject?.myRole === 'superadmin' ||
     hasSuperAdminProjectRole;
+  const hasAdminProject = projects.some(
+    (project) => project.myRole === 'admin' || project.myRole === 'superadmin',
+  );
+  const canAccessAdminPanel = Boolean(
+    user && (isSuperAdmin || hasAdminProject),
+  );
 
   let role: ResolvedRole = 'guest';
   if (currentProject?.myRole) {
@@ -47,6 +55,8 @@ export function useProjectRole(): ProjectRolePermissions {
     role,
     isSuperAdmin,
     isAdmin,
+    hasAdminProject,
+    canAccessAdminPanel,
     canCreateProject: isSuperAdmin,
     canManageProject: isAdmin,
     canRenameProject: isSuperAdmin,

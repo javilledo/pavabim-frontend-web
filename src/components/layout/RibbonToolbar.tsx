@@ -6,10 +6,7 @@ import { useProjectRole } from '../../hooks/useProjectRole';
 import { useViewerStore, type MeasureMode } from '../../store/useViewerStore';
 import { useEngine } from '../../viewer/EngineContext';
 import { SelectionAppearanceControls } from '../viewer/SelectionAppearanceControls';
-import {
-  ProjectManagementModal,
-  type ProjectManagementTab,
-} from '../projects/ProjectManagementModal';
+import { ProjectManagementModal } from '../projects/ProjectManagementModal';
 
 function getUserInitials(displayName?: string, email?: string): string {
   const source = (displayName || email || '').trim();
@@ -22,15 +19,11 @@ function getUserInitials(displayName?: string, email?: string): string {
 }
 
 export const RibbonToolbar: React.FC = () => {
-  const adminMenuRef = useRef<HTMLDivElement | null>(null);
   const measureGroupRef = useRef<HTMLDivElement | null>(null);
   const measureMenuRef = useRef<HTMLDivElement | null>(null);
   const appearanceBtnRef = useRef<HTMLButtonElement | null>(null);
   const appearanceMenuRef = useRef<HTMLDivElement | null>(null);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
-  const [modalInitialTab, setModalInitialTab] =
-    useState<ProjectManagementTab>('overview');
-  const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
   const [isMeasureMenuOpen, setIsMeasureMenuOpen] = useState(false);
   const [measureMenuPos, setMeasureMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
@@ -38,14 +31,7 @@ export const RibbonToolbar: React.FC = () => {
   const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
 
   const { user, loading: authLoading, logout } = useAuth();
-  const {
-    role,
-    isSuperAdmin,
-    isAdmin,
-    canCreateProject,
-    canManageProject,
-    canManageMembers,
-  } = useProjectRole();
+  const { role, isSuperAdmin, canAccessAdminPanel } = useProjectRole();
 
   const {
     activeTool,
@@ -137,48 +123,11 @@ export const RibbonToolbar: React.FC = () => {
     setAvatarLoadFailed(false);
   }, [avatarUrl]);
 
-  const canShowAdminGear = Boolean(
-    user && (isSuperAdmin || (currentProject && isAdmin)),
-  );
-
   useEffect(() => {
-    if (!canShowAdminGear) {
-      setIsAdminMenuOpen(false);
+    if (!canAccessAdminPanel) {
       setIsProjectModalOpen(false);
     }
-  }, [canShowAdminGear]);
-
-  useEffect(() => {
-    if (!isAdminMenuOpen) return;
-
-    const handlePointerDown = (event: PointerEvent) => {
-      if (
-        adminMenuRef.current &&
-        !adminMenuRef.current.contains(event.target as Node)
-      ) {
-        setIsAdminMenuOpen(false);
-      }
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsAdminMenuOpen(false);
-      }
-    };
-
-    window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isAdminMenuOpen]);
-
-  const openManagementTab = (targetTab: ProjectManagementTab) => {
-    setModalInitialTab(targetTab);
-    setIsAdminMenuOpen(false);
-    setIsProjectModalOpen(true);
-  };
+  }, [canAccessAdminPanel]);
 
   useEffect(() => {
     if (!isMeasureMenuOpen) return;
@@ -939,103 +888,38 @@ export const RibbonToolbar: React.FC = () => {
                 )}
               </button>
 
-              {canShowAdminGear && (
-                <div ref={adminMenuRef} className="relative">
-                  <button
-                    type="button"
-                    aria-haspopup="menu"
-                    aria-expanded={isAdminMenuOpen}
-                    onClick={() => setIsAdminMenuOpen((prev) => !prev)}
-                    className={`p-1.5 rounded border transition-colors ${
-                      isAdminMenuOpen
-                        ? 'border-pavasal-500 bg-pavasal-500 text-asphalt-950'
-                        : 'border-asphalt-700 bg-asphalt-800 text-asphalt-200 hover:border-pavasal-500/60 hover:text-pavasal-400'
-                    }`}
-                    title="Administración de proyecto y Drive"
-                    aria-label="Administración de proyecto y Drive"
+              {canAccessAdminPanel && (
+                <button
+                  type="button"
+                  onClick={() => setIsProjectModalOpen(true)}
+                  className={`p-1.5 rounded border transition-colors ${
+                    isProjectModalOpen
+                      ? 'border-pavasal-500 bg-pavasal-500 text-asphalt-950'
+                      : 'border-asphalt-700 bg-asphalt-800 text-asphalt-200 hover:border-pavasal-500/60 hover:text-pavasal-400'
+                  }`}
+                  title="Panel de administración"
+                  aria-label="Panel de administración"
+                >
+                  <svg
+                    className="w-4 h-4"
+                    viewBox="0 0 20 20"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    aria-hidden="true"
                   >
-                    <svg
-                      className="w-4 h-4"
-                      viewBox="0 0 20 20"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.6"
-                      aria-hidden="true"
-                    >
-                      <path
-                        d="M10 12.6a2.6 2.6 0 100-5.2 2.6 2.6 0 000 5.2Z"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                      <path
-                        d="M16.1 12.1a1.4 1.4 0 00.28 1.54l.05.05a1.7 1.7 0 11-2.4 2.4l-.05-.05a1.4 1.4 0 00-1.54-.28 1.4 1.4 0 00-.85 1.28v.14a1.7 1.7 0 11-3.4 0v-.07a1.4 1.4 0 00-.92-1.28 1.4 1.4 0 00-1.54.28l-.05.05a1.7 1.7 0 11-2.4-2.4l.05-.05a1.4 1.4 0 00.28-1.54 1.4 1.4 0 00-1.28-.85H2.8a1.7 1.7 0 110-3.4h.07a1.4 1.4 0 001.28-.92 1.4 1.4 0 00-.28-1.54l-.05-.05a1.7 1.7 0 112.4-2.4l.05.05a1.4 1.4 0 001.54.28h.07a1.4 1.4 0 00.85-1.28V2.8a1.7 1.7 0 113.4 0v.07a1.4 1.4 0 00.85 1.28 1.4 1.4 0 001.54-.28l.05-.05a1.7 1.7 0 112.4 2.4l-.05.05a1.4 1.4 0 00-.28 1.54v.07a1.4 1.4 0 001.28.85h.14a1.7 1.7 0 110 3.4h-.07a1.4 1.4 0 00-1.28.85Z"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </button>
-
-                  {isAdminMenuOpen && (
-                    <div
-                      role="menu"
-                      className="absolute right-0 mt-1.5 w-56 rounded-md border border-asphalt-700 bg-asphalt-900 shadow-xl py-1 z-50 text-xs"
-                    >
-                      {!isSuperAdmin && (
-                        <div className="px-3 py-1.5 border-b border-asphalt-800 text-[10px] font-semibold uppercase tracking-wider text-pavasal-400">
-                          {currentProject
-                            ? `${currentProject.name} (${role})`
-                            : 'Administración global'}
-                        </div>
-                      )}
-
-                      {(canManageProject || isSuperAdmin) && (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={() => openManagementTab('overview')}
-                          className="w-full text-left px-3 py-2 text-asphalt-100 hover:bg-asphalt-800 hover:text-pavasal-400 transition-colors"
-                        >
-                          {currentProject
-                            ? 'Resumen y Google Drive'
-                            : 'Conectar Google Drive'}
-                        </button>
-                      )}
-
-                      {currentProject && canManageMembers && (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={() => openManagementTab('members')}
-                          className="w-full text-left px-3 py-2 text-asphalt-100 hover:bg-asphalt-800 hover:text-pavasal-400 transition-colors"
-                        >
-                          Gestionar miembros
-                        </button>
-                      )}
-
-                      {canCreateProject && (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={() => openManagementTab('create')}
-                          className="w-full text-left px-3 py-2 text-asphalt-100 hover:bg-asphalt-800 hover:text-pavasal-400 transition-colors"
-                        >
-                          + Nuevo proyecto
-                        </button>
-                      )}
-
-                      {isSuperAdmin && (
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={() => openManagementTab('settings')}
-                          className="w-full text-left px-3 py-2 text-asphalt-100 hover:bg-asphalt-800 hover:text-pavasal-400 transition-colors border-t border-asphalt-800/80"
-                        >
-                          Configuración Superadmin
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
+                    <path
+                      d="M10 12.6a2.6 2.6 0 100-5.2 2.6 2.6 0 000 5.2Z"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M16.1 12.1a1.4 1.4 0 00.28 1.54l.05.05a1.7 1.7 0 11-2.4 2.4l-.05-.05a1.4 1.4 0 00-1.54-.28 1.4 1.4 0 00-.85 1.28v.14a1.7 1.7 0 11-3.4 0v-.07a1.4 1.4 0 00-.92-1.28 1.4 1.4 0 00-1.54.28l-.05.05a1.7 1.7 0 11-2.4-2.4l.05-.05a1.4 1.4 0 00.28-1.54 1.4 1.4 0 00-1.28-.85H2.8a1.7 1.7 0 110-3.4h.07a1.4 1.4 0 001.28-.92 1.4 1.4 0 00-.28-1.54l-.05-.05a1.7 1.7 0 112.4-2.4l.05.05a1.4 1.4 0 001.54.28h.07a1.4 1.4 0 00.85-1.28V2.8a1.7 1.7 0 113.4 0v.07a1.4 1.4 0 00.85 1.28 1.4 1.4 0 001.54-.28l.05-.05a1.7 1.7 0 112.4 2.4l-.05.05a1.4 1.4 0 00-.28 1.54v.07a1.4 1.4 0 001.28.85h.14a1.7 1.7 0 110 3.4h-.07a1.4 1.4 0 00-1.28.85Z"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
               )}
 
               <button
@@ -1211,7 +1095,6 @@ export const RibbonToolbar: React.FC = () => {
       <ProjectManagementModal
         isOpen={isProjectModalOpen}
         onClose={() => setIsProjectModalOpen(false)}
-        initialTab={modalInitialTab}
       />
     </>
   );

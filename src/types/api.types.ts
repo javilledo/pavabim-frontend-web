@@ -21,6 +21,8 @@ export interface ProjectDriveConfig {
 export interface ProjectMember {
   id: string;
   email: string;
+  name?: string;
+  displayName?: string;
   roleId: ProjectRole | string;
   rolePath?: string;
   roleName?: string;
@@ -242,6 +244,8 @@ export interface UpdateSettingsPayload {
 export interface SuperAdminEntry {
   id: string;
   email?: string;
+  name?: string;
+  displayName?: string;
   uid?: string | null;
   roleId?: string;
   assignedAt?: unknown;
