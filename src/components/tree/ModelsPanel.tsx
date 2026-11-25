@@ -54,7 +54,7 @@ function getModelCardClassName(
 export const ModelsPanel: React.FC = () => {
   const queryClient = useQueryClient();
   const { user } = useAuth();
-  const { canManageModels, canSyncDrive } = useProjectRole();
+  const { isAdmin, canSyncDrive } = useProjectRole();
   const {
     loadedModels,
     currentProject,
@@ -711,7 +711,7 @@ export const ModelsPanel: React.FC = () => {
                 convertMutation.variables?.modelName === model.modelName);
             const canConvert =
               model.status !== 'PROCESSING' &&
-              canManageModels &&
+              isAdmin &&
               !isConvertingThis;
             const canLoadOrUnload =
               isEngineReady &&
@@ -728,15 +728,13 @@ export const ModelsPanel: React.FC = () => {
 
             const convertTitle = isConvertingThis
               ? 'Convirtiendo IFC a .frag...'
-              : !canManageModels
-                ? 'Sin permisos para convertir'
-                : model.status === 'FAILED'
-                  ? 'Reintentar conversión IFC → .frag'
-                  : isOutdated
-                    ? 'IFC más reciente detectado: reconvertir a .frag'
-                    : model.status === 'READY'
-                      ? 'Forzar nueva conversión IFC → .frag'
-                      : 'Convertir IFC a .frag';
+              : model.status === 'FAILED'
+                ? 'Reintentar conversión IFC → .frag'
+                : isOutdated
+                  ? 'IFC más reciente detectado: reconvertir a .frag'
+                  : model.status === 'READY'
+                    ? 'Forzar nueva conversión IFC → .frag'
+                    : 'Convertir IFC a .frag';
 
             const loadTitle = isLoadingThis
               ? 'Cargando modelo en el visor...'
@@ -911,68 +909,70 @@ export const ModelsPanel: React.FC = () => {
                       )}
                     </button>
 
-                    {/* Convert / Force Reconvert IFC -> FRAG */}
-                    <button
-                      type="button"
-                      disabled={!canConvert}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        convertMutation.mutate({
-                          modelName: model.modelName,
-                          force: model.status === 'READY' || isOutdated,
-                        });
-                      }}
-                      aria-label={
-                        model.status === 'READY'
-                          ? `Forzar reconversión de ${model.modelName} de IFC a FRAG`
-                          : `Convertir ${model.modelName} de IFC a FRAG`
-                      }
-                      title={convertTitle}
-                      className={`p-1 rounded border transition-colors ${
-                        isConvertingThis
-                          ? 'border-pavasal-500/50 bg-pavasal-500/15 text-pavasal-400 cursor-wait'
-                          : canConvert && model.status === 'FAILED'
-                            ? 'border-red-700/70 bg-red-950/60 text-red-300 hover:bg-red-500 hover:text-white'
-                            : canConvert && isOutdated
-                              ? 'border-amber-500/80 bg-amber-500/15 text-amber-300 hover:bg-amber-500 hover:text-asphalt-950'
-                              : canConvert && model.status === 'READY'
-                                ? 'border-emerald-700/70 bg-emerald-950/40 text-emerald-300 hover:border-pavasal-500 hover:bg-pavasal-500 hover:text-asphalt-950'
-                                : canConvert
-                                  ? 'border-pavasal-500/70 bg-pavasal-500/10 text-pavasal-400 hover:bg-pavasal-500 hover:text-asphalt-950'
-                                  : 'border-transparent text-asphalt-500 opacity-35 cursor-not-allowed'
-                      }`}
-                    >
-                      {isConvertingThis ? (
-                        <svg
-                          className="w-3.5 h-3.5 animate-spin"
-                          viewBox="0 0 16 16"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.5"
-                          aria-hidden="true"
-                        >
-                          <path
-                            d="M13.5 8a5.5 5.5 0 11-1.6-3.9"
-                            strokeLinecap="round"
-                          />
-                        </svg>
-                      ) : (
-                        <svg
-                          className="w-3.5 h-3.5"
-                          viewBox="0 0 16 16"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.4"
-                          aria-hidden="true"
-                        >
-                          <path
-                            d="M12.5 5.5A4.8 4.8 0 004.3 4.3L2.8 5.8M2.8 3v2.8h2.8M3.5 10.5a4.8 4.8 0 008.2 1.2l1.5-1.5M13.2 13v-2.8h-2.8"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
-                      )}
-                    </button>
+                    {/* Convert / Force Reconvert IFC -> FRAG (Superadmin / Project Admin only) */}
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        disabled={!canConvert}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          convertMutation.mutate({
+                            modelName: model.modelName,
+                            force: model.status === 'READY' || isOutdated,
+                          });
+                        }}
+                        aria-label={
+                          model.status === 'READY'
+                            ? `Forzar reconversión de ${model.modelName} de IFC a FRAG`
+                            : `Convertir ${model.modelName} de IFC a FRAG`
+                        }
+                        title={convertTitle}
+                        className={`p-1 rounded border transition-colors ${
+                          isConvertingThis
+                            ? 'border-pavasal-500/50 bg-pavasal-500/15 text-pavasal-400 cursor-wait'
+                            : canConvert && model.status === 'FAILED'
+                              ? 'border-red-700/70 bg-red-950/60 text-red-300 hover:bg-red-500 hover:text-white'
+                              : canConvert && isOutdated
+                                ? 'border-amber-500/80 bg-amber-500/15 text-amber-300 hover:bg-amber-500 hover:text-asphalt-950'
+                                : canConvert && model.status === 'READY'
+                                  ? 'border-emerald-700/70 bg-emerald-950/40 text-emerald-300 hover:border-pavasal-500 hover:bg-pavasal-500 hover:text-asphalt-950'
+                                  : canConvert
+                                    ? 'border-pavasal-500/70 bg-pavasal-500/10 text-pavasal-400 hover:bg-pavasal-500 hover:text-asphalt-950'
+                                    : 'border-transparent text-asphalt-500 opacity-35 cursor-not-allowed'
+                        }`}
+                      >
+                        {isConvertingThis ? (
+                          <svg
+                            className="w-3.5 h-3.5 animate-spin"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            aria-hidden="true"
+                          >
+                            <path
+                              d="M13.5 8a5.5 5.5 0 11-1.6-3.9"
+                              strokeLinecap="round"
+                            />
+                          </svg>
+                        ) : (
+                          <svg
+                            className="w-3.5 h-3.5"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.4"
+                            aria-hidden="true"
+                          >
+                            <path
+                              d="M12.5 5.5A4.8 4.8 0 004.3 4.3L2.8 5.8M2.8 3v2.8h2.8M3.5 10.5a4.8 4.8 0 008.2 1.2l1.5-1.5M13.2 13v-2.8h-2.8"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        )}
+                      </button>
+                    )}
 
                     {/* Load into / Unload from 3D scene */}
                     <button
