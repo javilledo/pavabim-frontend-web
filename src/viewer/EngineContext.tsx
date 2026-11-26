@@ -22,7 +22,13 @@ import {
   type CameraProjectionMode,
   type ElementAppearanceOverride,
 } from '../store/useViewerStore';
-import type { CameraViewpointData } from '../types/bcf.types';
+import type { BcfViewpoint, CameraViewpointData } from '../types/bcf.types';
+import {
+  applyViewpointToEngine,
+  captureCurrentViewpointDraft,
+  resolveViewpointPinWorldPosition,
+  type CapturedViewpointDraft,
+} from './BcfViewerBridge';
 import { formatDecimalEs } from '../utils/numberFormat';
 import {
   buildStructuredSelectionProperties,
@@ -131,6 +137,11 @@ export interface EngineContextValue {
   captureSnapshotBlob: () => Promise<Blob | null>;
   getCameraViewpoint: () => CameraViewpointData | null;
   setCameraViewpoint: (data: CameraViewpointData) => Promise<void>;
+  captureBcfViewpointDraft: () => Promise<CapturedViewpointDraft>;
+  applyBcfViewpoint: (viewpoint: BcfViewpoint) => Promise<void>;
+  resolveBcfViewpointPinPosition: (
+    viewpoint: BcfViewpoint
+  ) => Promise<THREE.Vector3 | null>;
   toggleGridVisibility: (visible?: boolean) => void;
   toggleSectionBox: () => void;
   pickFaceAtClientPoint: (clientX: number, clientY: number) => Promise<SurfaceFaceHit | null>;
@@ -4924,6 +4935,85 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     [setStoreCameraProjection]
   );
 
+  const captureBcfViewpointDraft = useCallback(async () => {
+    const components = componentsRef.current;
+    const world = worldRef.current;
+    const fragments = fragmentsRef.current;
+    if (!components || !world || !fragments) {
+      throw new Error('El motor 3D aún no está inicializado.');
+    }
+    return captureCurrentViewpointDraft({
+      components,
+      world,
+      fragments,
+      clipper: clipperRef.current,
+      getModelElementIds,
+      setCameraProjection,
+      clearSelection,
+      focusSelectionMap,
+      showAllElements,
+      applyCustomAppearancesMap,
+      resetAllCustomAppearances,
+      clearSections,
+    });
+  }, [
+    applyCustomAppearancesMap,
+    clearSections,
+    clearSelection,
+    focusSelectionMap,
+    getModelElementIds,
+    resetAllCustomAppearances,
+    setCameraProjection,
+    showAllElements,
+  ]);
+
+  const applyBcfViewpoint = useCallback(
+    async (viewpoint: BcfViewpoint) => {
+      const components = componentsRef.current;
+      const world = worldRef.current;
+      const fragments = fragmentsRef.current;
+      if (!components || !world || !fragments) return;
+
+      orthoZoomTargetRef.current = null;
+      await applyViewpointToEngine(
+        {
+          components,
+          world,
+          fragments,
+          clipper: clipperRef.current,
+          getModelElementIds,
+          setCameraProjection,
+          clearSelection,
+          focusSelectionMap,
+          showAllElements,
+          applyCustomAppearancesMap,
+          resetAllCustomAppearances,
+          clearSections,
+        },
+        viewpoint
+      );
+    },
+    [
+      applyCustomAppearancesMap,
+      clearSections,
+      clearSelection,
+      focusSelectionMap,
+      getModelElementIds,
+      resetAllCustomAppearances,
+      setCameraProjection,
+      showAllElements,
+    ]
+  );
+
+  const resolveBcfViewpointPinPosition = useCallback(
+    async (viewpoint: BcfViewpoint) => {
+      const fragments = fragmentsRef.current;
+      if (!fragments) return null;
+      return resolveViewpointPinWorldPosition(fragments, viewpoint);
+    },
+    []
+  );
+
   return (
     <EngineContext.Provider
       value={{
@@ -4962,6 +5052,9 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         captureSnapshotBlob,
         getCameraViewpoint,
         setCameraViewpoint,
+        captureBcfViewpointDraft,
+        applyBcfViewpoint,
+        resolveBcfViewpointPinPosition,
         toggleGridVisibility,
         toggleSectionBox,
         pickFaceAtClientPoint,

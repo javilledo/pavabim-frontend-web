@@ -46,11 +46,13 @@ export const RibbonToolbar: React.FC = () => {
     hiddenElementsMap,
     customAppearanceCount,
     isIsolationActive,
+    areBcfPinsVisible,
     projects,
     currentProject,
     setActiveTool,
     setMeasureMode,
     toggleThemeMode,
+    toggleBcfPinsVisible,
     setProjects,
     setCurrentProjectById,
     resetProjectContext,
@@ -740,6 +742,40 @@ export const RibbonToolbar: React.FC = () => {
               <path d="M3 7a5 5 0 1 1 1.2 4.3M3 4v3h3" />
             </svg>
             Restablecer visualización
+          </button>
+
+          <button
+            type="button"
+            onClick={toggleBcfPinsVisible}
+            disabled={!isEngineReady || !currentProjectId}
+            aria-pressed={areBcfPinsVisible}
+            className={`px-2.5 py-1.5 rounded text-xs transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 disabled:opacity-40 ${
+              areBcfPinsVisible
+                ? 'bg-pavasal-500 text-asphalt-950 font-semibold shadow-sm'
+                : 'text-asphalt-200 font-medium hover:bg-asphalt-800 hover:text-white'
+            }`}
+            title={
+              !currentProjectId
+                ? 'Selecciona un proyecto para mostrar los pines 3D de tópicos BCF'
+                : areBcfPinsVisible
+                  ? 'Ocultar pines 3D de tópicos abiertos en escena'
+                  : 'Mostrar pines 3D de tópicos abiertos en escena'
+            }
+          >
+            <svg
+              className="w-3.5 h-3.5 shrink-0"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M8 14.5s4.5-4.2 4.5-7.8a4.5 4.5 0 1 0-9 0C3.5 10.3 8 14.5 8 14.5Z" />
+              <circle cx="8" cy="6.7" r="1.6" />
+            </svg>
+            Mostrar pines de tópicos
           </button>
 
           <div className="h-4 w-px bg-asphalt-700 mx-1 shrink-0" />

@@ -1,8 +1,9 @@
-import apiClient, { fetchAuthenticatedBlobUrl } from './client';
+import apiClient, { fetchAuthenticatedBlobUrl, normalizeApiPath } from './client';
 import type {
   AssignTopicPayload,
   BcfBimSnippet,
   BcfComment,
+  BcfDocument,
   BcfDocumentReference,
   BcfHeaderFile,
   BcfProjectExtensions,
@@ -31,11 +32,31 @@ import type {
 } from '../types/bcf.types';
 
 function projectBcfBase(projectId: string): string {
-  return `/projects/${encodeURIComponent(projectId)}/bcf`;
+  return `/bcf/3.0/projects/${encodeURIComponent(projectId)}`;
 }
 
 function topicBase(projectId: string, topicId: string): string {
   return `${projectBcfBase(projectId)}/topics/${encodeURIComponent(topicId)}`;
+}
+
+function parseContentDispositionFilename(
+  headerValue: string | undefined,
+  fallback: string,
+): string {
+  if (!headerValue) return fallback;
+  const utf8Match = headerValue.match(/filename\*=UTF-8''([^;\n]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim().replace(/^"|"$/g, ''));
+    } catch {
+      // Fall through to standard filename match
+    }
+  }
+  const simpleMatch = headerValue.match(/filename="?([^";\n]+)"?/i);
+  if (simpleMatch?.[1]) {
+    return simpleMatch[1].trim();
+  }
+  return fallback;
 }
 
 export const bcfService = {
@@ -61,7 +82,7 @@ export const bcfService = {
   },
 
   // ---------------------------------------------------------------------------
-  // Stats, Events, Bulk Update
+  // Stats, Events, Bulk Update & Native BCF 3.0 Archive Export
   // ---------------------------------------------------------------------------
   async getTopicStats(projectId: string): Promise<BcfTopicStats> {
     const { data } = await apiClient.get<BcfTopicStats>(
@@ -92,6 +113,49 @@ export const bcfService = {
     return data;
   },
 
+  async exportBcfArchive(
+    projectId: string,
+    topicGuids?: string[],
+    fallbackProjectName?: string,
+  ): Promise<void> {
+    const params: Record<string, string> = {};
+    if (topicGuids && topicGuids.length > 0) {
+      params.topic_guids = topicGuids.join(',');
+    }
+
+    const response = await apiClient.get<Blob>(
+      `${projectBcfBase(projectId)}/export/bcf`,
+      {
+        params: Object.keys(params).length > 0 ? params : undefined,
+        responseType: 'blob',
+        timeout: 180000,
+      },
+    );
+
+    const safeName = (fallbackProjectName || 'proyecto')
+      .trim()
+      .replace(/[<>:"/\\|?*]+/g, '_');
+    const disposition = response.headers['content-disposition'] as
+      | string
+      | undefined;
+    const filename = parseContentDispositionFilename(
+      disposition,
+      `${safeName}.bcf`,
+    );
+
+    const blobUrl = URL.createObjectURL(response.data);
+    try {
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename.endsWith('.bcf') ? filename : `${filename}.bcf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } finally {
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+    }
+  },
+
   // ---------------------------------------------------------------------------
   // Topics CRUD & Actions
   // ---------------------------------------------------------------------------
@@ -99,9 +163,13 @@ export const bcfService = {
     projectId: string,
     params?: QueryTopicsParams,
   ): Promise<BcfTopic[]> {
+    const serializedParams: Record<string, unknown> = { ...(params ?? {}) };
+    if (Array.isArray(serializedParams.labels)) {
+      serializedParams.labels = serializedParams.labels.join(',');
+    }
     const { data } = await apiClient.get<BcfTopic[]>(
       `${projectBcfBase(projectId)}/topics`,
-      { params },
+      { params: serializedParams },
     );
     return data;
   },
@@ -147,9 +215,12 @@ export const bcfService = {
     projectId: string,
     payload: CreateTopicPayload,
   ): Promise<BcfTopic> {
+    const cleanPayload: Record<string, unknown> = { ...payload };
+    delete cleanPayload.server_assigned_id;
+
     const { data } = await apiClient.post<BcfTopic>(
       `${projectBcfBase(projectId)}/topics`,
-      payload,
+      cleanPayload,
     );
     return data;
   },
@@ -184,8 +255,8 @@ export const bcfService = {
     payload: UpdateTopicStatusPayload,
   ): Promise<BcfTopic> {
     const { data } = await apiClient.patch<BcfTopic>(
-      `${topicBase(projectId, topicId)}/status`,
-      payload,
+      topicBase(projectId, topicId),
+      { topic_status: payload.topic_status },
     );
     return data;
   },
@@ -196,8 +267,8 @@ export const bcfService = {
     payload: AssignTopicPayload,
   ): Promise<BcfTopic> {
     const { data } = await apiClient.patch<BcfTopic>(
-      `${topicBase(projectId, topicId)}/assign`,
-      payload,
+      topicBase(projectId, topicId),
+      { assigned_to: payload.assigned_to ?? undefined },
     );
     return data;
   },
@@ -224,8 +295,77 @@ export const bcfService = {
   },
 
   // ---------------------------------------------------------------------------
-  // Topic Sub-Resources: Files, Related Topics, Document References, BIM Snippet
+  // Project Documents & Topic Document References (BCF 3.0)
   // ---------------------------------------------------------------------------
+  async getDocuments(projectId: string): Promise<BcfDocument[]> {
+    const { data } = await apiClient.get<BcfDocument[]>(
+      `${projectBcfBase(projectId)}/documents`,
+    );
+    return data;
+  },
+
+  async uploadDocument(
+    projectId: string,
+    file: File,
+    description?: string,
+  ): Promise<BcfDocument> {
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    if (description && description.trim()) {
+      formData.append('description', description.trim());
+    }
+
+    const { data } = await apiClient.post<BcfDocument>(
+      `${projectBcfBase(projectId)}/documents`,
+      formData,
+      { timeout: 180000 },
+    );
+    return data;
+  },
+
+  async downloadDocument(
+    projectId: string,
+    documentGuid: string,
+    fallbackFilename: string,
+    openInNewTab = false,
+  ): Promise<void> {
+    const response = await apiClient.get<Blob>(
+      `${projectBcfBase(projectId)}/documents/${encodeURIComponent(documentGuid)}`,
+      {
+        responseType: 'blob',
+        timeout: 180000,
+      },
+    );
+
+    const disposition = response.headers['content-disposition'] as
+      | string
+      | undefined;
+    const filename = parseContentDispositionFilename(
+      disposition,
+      fallbackFilename || `documento-${documentGuid.slice(0, 8)}`,
+    );
+
+    const blobUrl = URL.createObjectURL(response.data);
+    if (openInNewTab) {
+      const opened = window.open(blobUrl, '_blank', 'noopener,noreferrer');
+      if (opened) {
+        window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+        return;
+      }
+    }
+
+    try {
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } finally {
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+    }
+  },
+
   async getTopicFiles(
     projectId: string,
     topicId: string,
@@ -285,9 +425,20 @@ export const bcfService = {
     topicId: string,
     payload: CreateDocumentReferencePayload,
   ): Promise<BcfDocumentReference> {
+    // Enforce BCF 3.0 XOR rule: send document_guid OR url, never both
+    const body: Record<string, string> = {};
+    if ('document_guid' in payload && payload.document_guid) {
+      body.document_guid = payload.document_guid;
+    } else if ('url' in payload && payload.url) {
+      body.url = payload.url;
+    }
+    if (payload.description && payload.description.trim()) {
+      body.description = payload.description.trim();
+    }
+
     const { data } = await apiClient.post<BcfDocumentReference>(
       `${topicBase(projectId, topicId)}/document_references`,
-      payload,
+      body,
     );
     return data;
   },
@@ -298,9 +449,19 @@ export const bcfService = {
     docRefGuid: string,
     payload: UpdateDocumentReferencePayload,
   ): Promise<BcfDocumentReference> {
+    const body: Record<string, string> = {};
+    if ('document_guid' in payload && payload.document_guid) {
+      body.document_guid = payload.document_guid;
+    } else if ('url' in payload && payload.url) {
+      body.url = payload.url;
+    }
+    if (payload.description && payload.description.trim()) {
+      body.description = payload.description.trim();
+    }
+
     const { data } = await apiClient.put<BcfDocumentReference>(
       `${topicBase(projectId, topicId)}/document_references/${encodeURIComponent(docRefGuid)}`,
-      payload,
+      body,
     );
     return data;
   },
@@ -373,9 +534,17 @@ export const bcfService = {
     topicId: string,
     payload: CreateCommentPayload,
   ): Promise<BcfComment> {
+    const body: CreateCommentPayload = {};
+    if (payload.comment && payload.comment.trim()) {
+      body.comment = payload.comment.trim();
+    }
+    if (payload.viewpoint_guid) {
+      body.viewpoint_guid = payload.viewpoint_guid;
+    }
+
     const { data } = await apiClient.post<BcfComment>(
       `${topicBase(projectId, topicId)}/comments`,
-      payload,
+      body,
     );
     return data;
   },
@@ -447,7 +616,7 @@ export const bcfService = {
   ): Promise<BcfViewpoint> {
     const url = `${topicBase(projectId, topicId)}/viewpoints`;
 
-    if (payload.snapshotFile) {
+    if (payload.snapshotFile && !payload.snapshot?.snapshot_data) {
       const formData = new FormData();
       const file = payload.snapshotFile;
       const filename =
@@ -456,6 +625,12 @@ export const bcfService = {
 
       if (payload.index !== undefined) {
         formData.append('index', String(payload.index));
+      }
+      if (payload.camera_type) {
+        formData.append('camera_type', payload.camera_type);
+      }
+      if (payload.camera_data) {
+        formData.append('camera_data', JSON.stringify(payload.camera_data));
       }
       if (payload.perspective_camera) {
         formData.append(
@@ -527,6 +702,28 @@ export const bcfService = {
     return data;
   },
 
+  resolveTopicThumbnailPath(
+    projectId: string,
+    topic: Pick<
+      BcfTopic,
+      | 'guid'
+      | 'thumbnail_url'
+      | 'default_viewpoint_guid'
+      | 'default_snapshot_file_id'
+    >,
+  ): string | null {
+    if (topic.thumbnail_url) {
+      return normalizeApiPath(topic.thumbnail_url);
+    }
+    if (topic.default_viewpoint_guid) {
+      return `${topicBase(projectId, topic.guid)}/viewpoints/${encodeURIComponent(topic.default_viewpoint_guid)}/snapshot`;
+    }
+    if (topic.default_snapshot_file_id) {
+      return `/projects/${encodeURIComponent(projectId)}/bcf/images/${encodeURIComponent(topic.default_snapshot_file_id)}`;
+    }
+    return null;
+  },
+
   resolveViewpointSnapshotPath(
     projectId: string,
     topicId: string,
@@ -544,7 +741,11 @@ export const bcfService = {
       viewpoint.snapshot_url ||
       viewpoint.snapshot?.snapshot_url;
     if (directUrl) {
-      return directUrl;
+      return normalizeApiPath(directUrl);
+    }
+
+    if (viewpoint.guid) {
+      return `${topicBase(projectId, topicId)}/viewpoints/${encodeURIComponent(viewpoint.guid)}/snapshot`;
     }
 
     const fileId =
@@ -553,11 +754,7 @@ export const bcfService = {
       viewpoint.snapshot_file_id ||
       viewpoint.snapshotFileId;
     if (fileId) {
-      return `${projectBcfBase(projectId)}/images/${encodeURIComponent(fileId)}`;
-    }
-
-    if (viewpoint.guid) {
-      return `${topicBase(projectId, topicId)}/viewpoints/${encodeURIComponent(viewpoint.guid)}/snapshot`;
+      return `/projects/${encodeURIComponent(projectId)}/bcf/images/${encodeURIComponent(fileId)}`;
     }
 
     return null;
@@ -570,12 +767,6 @@ export const bcfService = {
   ): Promise<string> {
     return fetchAuthenticatedBlobUrl(
       `${topicBase(projectId, topicId)}/viewpoints/${encodeURIComponent(viewpointId)}/snapshot`,
-    );
-  },
-
-  async fetchImageBlobUrl(projectId: string, fileId: string): Promise<string> {
-    return fetchAuthenticatedBlobUrl(
-      `${projectBcfBase(projectId)}/images/${encodeURIComponent(fileId)}`,
     );
   },
 };

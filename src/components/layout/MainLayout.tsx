@@ -1,5 +1,6 @@
 import React from 'react';
 import { useAutoConvertProjectModels } from '../../hooks/useAutoConvertProjectModels';
+import { useBcfScenePins } from '../../hooks/useBcfScenePins';
 import { useColorByParameterSync } from '../../hooks/useColorByParameterSync';
 import { RibbonToolbar } from './RibbonToolbar';
 import { LeftSidebar } from './LeftSidebar';
@@ -9,6 +10,7 @@ import { ViewerCanvas } from '../../viewer/ViewerCanvas';
 export const MainLayout: React.FC = () => {
   useAutoConvertProjectModels();
   useColorByParameterSync();
+  useBcfScenePins();
 
   return (
     <div className="w-screen h-screen flex flex-col overflow-hidden bg-asphalt-950 text-asphalt-50">

@@ -32,6 +32,15 @@ export interface BcfPerspectiveCamera {
   aspect_ratio?: number;
 }
 
+export interface BcfUnifiedCameraData {
+  camera_view_point: BcfPoint3D;
+  camera_direction: BcfDirection3D;
+  camera_up_vector: BcfDirection3D;
+  field_of_view?: number;
+  view_to_world_scale?: number;
+  aspect_ratio?: number;
+}
+
 export interface BcfLegacyCamera {
   position: BcfPoint3D;
   target: BcfPoint3D;
@@ -81,7 +90,7 @@ export interface BcfViewSetupHints {
 }
 
 export interface BcfComponentVisibility {
-  default_visibility?: boolean;
+  default_visibility: boolean;
   exceptions?: BcfComponent[];
   view_setup_hints?: BcfViewSetupHints;
 }
@@ -107,6 +116,8 @@ export interface BcfViewpointAuthorization {
 export interface BcfViewpoint {
   guid: string;
   index?: number;
+  camera_type?: 'perspective' | 'orthogonal';
+  camera_data?: BcfUnifiedCameraData | null;
   orthogonal_camera?: BcfOrthogonalCamera | null;
   perspective_camera?: BcfPerspectiveCamera | null;
   camera?: BcfLegacyCamera;
@@ -136,7 +147,7 @@ export interface BcfComment {
   author: string;
   author_uid?: string;
   comment: string;
-  viewpoint_guid?: string;
+  viewpoint_guid?: string | null;
   modified_date?: string;
   modified_author?: string;
   modified_author_uid?: string;
@@ -151,11 +162,25 @@ export interface BcfBimSnippet {
   reference_schema: string;
 }
 
+export interface BcfDocument {
+  guid: string;
+  project_id: string;
+  filename: string;
+  description?: string | null;
+  drive_file_id: string;
+  mime_type?: string;
+  size?: number;
+  download_url: string;
+  creation_date?: string;
+  creation_author?: string;
+}
+
 export interface BcfDocumentReference {
   guid: string;
   document_guid?: string;
   url?: string;
   description?: string;
+  filename?: string;
 }
 
 export interface BcfRelatedTopic {
@@ -217,8 +242,9 @@ export interface BcfTopic {
   deleted_date?: string;
   deleted_at?: string;
   deleted_by?: string;
-  default_viewpoint_guid?: string;
-  default_snapshot_file_id?: string;
+  default_viewpoint_guid?: string | null;
+  default_snapshot_file_id?: string | null;
+  thumbnail_url?: string | null;
   comments_count?: number;
   viewpoints_count?: number;
   comments?: BcfComment[];
@@ -227,15 +253,15 @@ export interface BcfTopic {
 }
 
 export interface DeleteTopicResponse {
-  success: boolean;
-  guid: string;
-  mode: 'soft-delete' | 'permanent-delete';
+  success?: boolean;
+  guid?: string;
+  mode?: 'soft-delete' | 'permanent-delete';
   note?: string;
 }
 
 export interface DeleteViewpointResponse {
-  success: boolean;
-  removedViewpointGuid: string;
+  success?: boolean;
+  removedViewpointGuid?: string;
 }
 
 export interface DeleteBimSnippetResponse {
@@ -257,10 +283,11 @@ export interface BcfTopicStats {
 }
 
 export interface BcfProjectExtensions {
+  project_id?: string;
   topic_type: string[];
   topic_status: string[];
   topic_label: string[];
-  snippet_type: string[];
+  snippet_type?: string[];
   priority: string[];
   user_id_type: string[];
   stage: string[];
@@ -279,6 +306,7 @@ export type UpdateExtensionsPayload = Partial<
     | 'snippet_type'
     | 'priority'
     | 'stage'
+    | 'user_id_type'
     | 'enforce_extensions'
   >
 >;
@@ -294,6 +322,7 @@ export type BcfTopicSortField =
 
 export interface QueryTopicsParams {
   search?: string;
+  title?: string;
   topic_status?: string;
   topic_type?: string;
   priority?: string;
@@ -308,6 +337,10 @@ export interface QueryTopicsParams {
   server_assigned_id?: string;
   includeAuthorization?: boolean | 'true' | 'false';
   includeDetails?: boolean | 'true' | 'false';
+  $top?: number;
+  $skip?: number;
+  $orderby?: string;
+  $filter?: string;
   sortBy?: BcfTopicSortField;
   sortOrder?: 'asc' | 'desc';
   limit?: number;
@@ -321,8 +354,8 @@ export interface QueryEventsParams {
 
 export interface CreateTopicPayload {
   title: string;
-  topic_type?: string;
-  topic_status?: string;
+  topic_type: string;
+  topic_status: string;
   priority?: string;
   index?: number;
   labels?: string[];
@@ -380,8 +413,8 @@ export interface BulkUpdateTopicsResponse {
 }
 
 export interface CreateCommentPayload {
-  comment: string;
-  viewpoint_guid?: string;
+  comment?: string;
+  viewpoint_guid?: string | null;
 }
 
 export interface UpdateCommentPayload {
@@ -390,7 +423,10 @@ export interface UpdateCommentPayload {
 }
 
 export interface CreateViewpointPayload {
+  guid?: string;
   index?: number;
+  camera_type?: 'perspective' | 'orthogonal';
+  camera_data?: BcfUnifiedCameraData;
   orthogonal_camera?: BcfOrthogonalCamera | null;
   perspective_camera?: BcfPerspectiveCamera | null;
   camera?: BcfLegacyCamera;
@@ -399,16 +435,22 @@ export interface CreateViewpointPayload {
   bitmaps?: BcfBitmap[];
   components?: BcfComponents;
   snapshot?: {
-    snapshot_type?: BcfBitmapFormat;
+    snapshot_type?: 'png' | 'jpg';
     snapshot_data?: string;
   };
   snapshotFile?: File | Blob;
 }
 
-export interface CreateDocumentReferencePayload {
-  document_guid?: string;
-  url?: string;
-  description?: string;
-}
+export type CreateDocumentReferencePayload =
+  | {
+      document_guid: string;
+      url?: never;
+      description?: string;
+    }
+  | {
+      url: string;
+      document_guid?: never;
+      description?: string;
+    };
 
 export type UpdateDocumentReferencePayload = CreateDocumentReferencePayload;

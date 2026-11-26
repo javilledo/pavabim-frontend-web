@@ -14,6 +14,7 @@ export type ActiveTool =
 export type MeasureMode = 'length' | 'area' | 'volume' | 'coordinates';
 export type CameraProjectionMode = 'Perspective' | 'Orthographic';
 export type ThemeMode = 'dark' | 'light';
+export type RightSidebarTab = 'inspector' | 'measurements' | 'bcf';
 
 export function getSystemThemeMode(): ThemeMode {
   if (
@@ -89,6 +90,9 @@ interface ViewerState {
   isSectionActive: boolean;
   isSectionGizmosVisible: boolean;
   themeMode: ThemeMode;
+  rightSidebarTab: RightSidebarTab;
+  isRightSidebarCollapsed: boolean;
+  areBcfPinsVisible: boolean;
 
   // 3D Loaded Models & Standalone Loading State
   loadedModels: LoadedModel[];
@@ -128,6 +132,11 @@ interface ViewerState {
   setSectionGizmosVisible: (visible: boolean) => void;
   setThemeMode: (theme: ThemeMode) => void;
   toggleThemeMode: () => void;
+  setRightSidebarTab: (tab: RightSidebarTab) => void;
+  setRightSidebarCollapsed: (collapsed: boolean) => void;
+  toggleRightSidebarCollapsed: () => void;
+  setBcfPinsVisible: (visible: boolean) => void;
+  toggleBcfPinsVisible: () => void;
   setModelLoading: (loading: boolean, modelName?: string | null) => void;
   setViewerToastError: (error: string | null) => void;
   addLoadedModel: (model: LoadedModel) => void;
@@ -186,6 +195,9 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   isSectionActive: false,
   isSectionGizmosVisible: true,
   themeMode: initialThemeMode,
+  rightSidebarTab: 'inspector',
+  isRightSidebarCollapsed: false,
+  areBcfPinsVisible: false,
 
   loadedModels: [],
   isLoadingModel: false,
@@ -240,6 +252,22 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       applyThemeToDocument(nextTheme);
       return { themeMode: nextTheme };
     }),
+
+  setRightSidebarTab: (rightSidebarTab) =>
+    set({ rightSidebarTab, isRightSidebarCollapsed: false }),
+
+  setRightSidebarCollapsed: (isRightSidebarCollapsed) =>
+    set({ isRightSidebarCollapsed }),
+
+  toggleRightSidebarCollapsed: () =>
+    set((state) => ({
+      isRightSidebarCollapsed: !state.isRightSidebarCollapsed,
+    })),
+
+  setBcfPinsVisible: (areBcfPinsVisible) => set({ areBcfPinsVisible }),
+
+  toggleBcfPinsVisible: () =>
+    set((state) => ({ areBcfPinsVisible: !state.areBcfPinsVisible })),
 
   setModelLoading: (isLoadingModel, loadingModelName = null) =>
     set({ isLoadingModel, loadingModelName }),
