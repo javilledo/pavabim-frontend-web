@@ -59,6 +59,34 @@ function parseContentDispositionFilename(
   return fallback;
 }
 
+function dataUrlOrBase64ToBlob(
+  rawData: string,
+  fallbackType = 'png',
+): { blob: Blob; ext: string } {
+  let mime = fallbackType.toLowerCase() === 'jpg' ? 'image/jpeg' : 'image/png';
+  let base64 = rawData.trim();
+
+  if (base64.startsWith('data:')) {
+    const commaIdx = base64.indexOf(',');
+    if (commaIdx !== -1) {
+      const header = base64.slice(5, commaIdx);
+      const mimeMatch = header.match(/^([^;]+)/);
+      if (mimeMatch?.[1]) {
+        mime = mimeMatch[1];
+      }
+      base64 = base64.slice(commaIdx + 1);
+    }
+  }
+
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'png';
+  return { blob: new Blob([bytes], { type: mime }), ext };
+}
+
 export const bcfService = {
   // ---------------------------------------------------------------------------
   // Extensions
@@ -616,13 +644,32 @@ export const bcfService = {
   ): Promise<BcfViewpoint> {
     const url = `${topicBase(projectId, topicId)}/viewpoints`;
 
-    if (payload.snapshotFile && !payload.snapshot?.snapshot_data) {
-      const formData = new FormData();
-      const file = payload.snapshotFile;
-      const filename =
-        file instanceof File ? file.name : `snapshot-${Date.now()}.png`;
-      formData.append('snapshot', file, filename);
+    let binarySnapshot: File | Blob | undefined = payload.snapshotFile;
+    let snapshotExt = 'png';
+    if (!binarySnapshot && payload.snapshot?.snapshot_data) {
+      try {
+        const converted = dataUrlOrBase64ToBlob(
+          payload.snapshot.snapshot_data,
+          payload.snapshot.snapshot_type || 'png',
+        );
+        binarySnapshot = converted.blob;
+        snapshotExt = converted.ext;
+      } catch {
+        // Fallback to JSON if base64 decoding fails
+      }
+    }
 
+    if (binarySnapshot) {
+      const formData = new FormData();
+      const filename =
+        binarySnapshot instanceof File
+          ? binarySnapshot.name
+          : `snapshot-${Date.now()}.${snapshotExt}`;
+      formData.append('snapshot', binarySnapshot, filename);
+
+      if (payload.guid) {
+        formData.append('guid', payload.guid);
+      }
       if (payload.index !== undefined) {
         formData.append('index', String(payload.index));
       }

@@ -266,11 +266,21 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
 
       const created = await bcfService.createTopic(projectId, payload);
       if (initialVpPayload) {
-        await bcfService.createViewpoint(
-          projectId,
-          created.guid,
-          initialVpPayload,
-        );
+        try {
+          await bcfService.createViewpoint(
+            projectId,
+            created.guid,
+            initialVpPayload,
+          );
+        } catch (vpErr) {
+          console.warn(
+            '[TopicDetailPanel] Topic created, but initial viewpoint failed:',
+            vpErr,
+          );
+          window.alert(
+            `El tópico ${created.server_assigned_id || ''} se creó, pero falló al subir la captura inicial: ${getApiErrorMessage(vpErr)}`,
+          );
+        }
       }
       return created;
     },
