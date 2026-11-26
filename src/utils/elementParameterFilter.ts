@@ -39,6 +39,11 @@ export function isVariosMarker(val: unknown): val is VariosAttributeMarker {
 export type ParameterFilterOperator =
   | 'equals'
   | 'not_equals'
+  | 'num_eq'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
   | 'contains'
   | 'not_contains'
   | 'starts_with'
@@ -53,11 +58,47 @@ export interface OperatorOption {
   label: string;
   needsValue: boolean;
   isMultiValue: boolean;
+  numericOnly?: boolean;
 }
 
 export const OPERATOR_OPTIONS: OperatorOption[] = [
   { value: 'equals', label: 'es', needsValue: true, isMultiValue: false },
   { value: 'not_equals', label: 'no es', needsValue: true, isMultiValue: false },
+  {
+    value: 'num_eq',
+    label: 'igual que',
+    needsValue: true,
+    isMultiValue: false,
+    numericOnly: true,
+  },
+  {
+    value: 'gt',
+    label: 'mayor que',
+    needsValue: true,
+    isMultiValue: false,
+    numericOnly: true,
+  },
+  {
+    value: 'gte',
+    label: 'mayor o igual que',
+    needsValue: true,
+    isMultiValue: false,
+    numericOnly: true,
+  },
+  {
+    value: 'lt',
+    label: 'menor que',
+    needsValue: true,
+    isMultiValue: false,
+    numericOnly: true,
+  },
+  {
+    value: 'lte',
+    label: 'menor o igual que',
+    needsValue: true,
+    isMultiValue: false,
+    numericOnly: true,
+  },
   {
     value: 'contains',
     label: 'contiene',
@@ -109,6 +150,7 @@ export interface ParameterDefinition {
   name: string;
   distinctValues: string[];
   elementCount: number;
+  isNumeric: boolean;
 }
 
 export interface FilterCondition {
@@ -162,9 +204,22 @@ export function operatorIsMultiValue(op: ParameterFilterOperator): boolean {
   return op === 'one_of' || op === 'none_of';
 }
 
+export function operatorIsNumericOnly(op: ParameterFilterOperator): boolean {
+  return (
+    op === 'num_eq' ||
+    op === 'gt' ||
+    op === 'gte' ||
+    op === 'lt' ||
+    op === 'lte'
+  );
+}
+
 export function isConditionReady(cond: FilterCondition): boolean {
   if (!cond.parameterKey) return false;
   if (!operatorNeedsValue(cond.operator)) return true;
+  if (operatorIsNumericOnly(cond.operator)) {
+    return parseStrictNumber(cond.value) !== null;
+  }
   if (operatorIsMultiValue(cond.operator)) {
     return parseMultiValueList(cond.value).length > 0;
   }
@@ -1204,16 +1259,39 @@ export function mergeModelParameterIndexes(
     }
   }
 
+  const NON_NUMERIC_IDENTITY_KEYS = new Set([
+    'attr::__entity__',
+    'attr::GlobalId',
+  ]);
+
   return Array.from(merged.entries())
-    .map(([key, item]) => ({
-      key,
-      group: item.group,
-      name: item.name,
-      elementCount: item.elementCount,
-      distinctValues: Array.from(item.values).sort((a, b) =>
-        a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }),
-      ),
-    }))
+    .map(([key, item]) => {
+      const rawValues = Array.from(item.values);
+      const isNumeric =
+        rawValues.length > 0 &&
+        !NON_NUMERIC_IDENTITY_KEYS.has(key) &&
+        rawValues.every((v) => parseStrictNumber(v) !== null);
+
+      const distinctValues = isNumeric
+        ? rawValues.sort(
+            (a, b) => (parseStrictNumber(a) ?? 0) - (parseStrictNumber(b) ?? 0),
+          )
+        : rawValues.sort((a, b) =>
+            a.localeCompare(b, undefined, {
+              numeric: true,
+              sensitivity: 'base',
+            }),
+          );
+
+      return {
+        key,
+        group: item.group,
+        name: item.name,
+        elementCount: item.elementCount,
+        distinctValues,
+        isNumeric,
+      };
+    })
     .sort((a, b) => {
       if (a.group !== b.group) {
         if (a.group === DIRECT_ATTR_GROUP) return -1;
@@ -1226,10 +1304,10 @@ export function mergeModelParameterIndexes(
     });
 }
 
-function parseStrictNumber(raw: string): number | null {
+export function parseStrictNumber(raw: string): number | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
-  if (!/^[+-]?\d+(?:[.,]\d+)?$/.test(trimmed)) return null;
+  if (!/^[+-]?\d+(?:[.,]\d+)?(?:[eE][+-]?\d+)?$/.test(trimmed)) return null;
   const num = Number(trimmed.replace(',', '.'));
   return Number.isFinite(num) ? num : null;
 }
@@ -1267,6 +1345,32 @@ export function evaluateSingleCondition(
     case 'not_equals': {
       const target = value.trim();
       return !defined.some((v) => valuesEqual(v, target));
+    }
+    case 'num_eq':
+    case 'gt':
+    case 'gte':
+    case 'lt':
+    case 'lte': {
+      const targetNum = parseStrictNumber(value);
+      if (targetNum === null) return false;
+      const numValues = defined
+        .map(parseStrictNumber)
+        .filter((n): n is number => n !== null);
+      if (numValues.length === 0) return false;
+      const STRICT_EPS = 1e-7;
+      switch (operator) {
+        case 'num_eq':
+          return numValues.some((n) => Math.abs(n - targetNum) <= 1e-6);
+        case 'gt':
+          return numValues.some((n) => n > targetNum + STRICT_EPS);
+        case 'gte':
+          return numValues.some((n) => n >= targetNum - STRICT_EPS);
+        case 'lt':
+          return numValues.some((n) => n < targetNum - STRICT_EPS);
+        case 'lte':
+          return numValues.some((n) => n <= targetNum + STRICT_EPS);
+      }
+      break;
     }
     case 'contains': {
       const needle = value.trim().toLowerCase();

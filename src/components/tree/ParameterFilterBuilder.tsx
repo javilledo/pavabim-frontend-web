@@ -5,8 +5,10 @@ import {
   isConditionReady,
   OPERATOR_OPTIONS,
   operatorIsMultiValue,
+  operatorIsNumericOnly,
   operatorNeedsValue,
   parseMultiValueList,
+  parseStrictNumber,
   valuesEqual,
   type FilterCondition,
   type ParameterDefinition,
@@ -199,6 +201,26 @@ export const ParameterFilterBuilder: React.FC<ParameterFilterBuilderProps> = ({
     };
   }, [openValueRowId]);
 
+  // If loaded models change and a parameter stops being numeric while a numeric-only operator is selected, reset operator to 'equals'
+  useEffect(() => {
+    if (parameters.length === 0) return;
+    let changed = false;
+    const sanitized = draftConditions.map((cond) => {
+      if (!cond.parameterKey || !operatorIsNumericOnly(cond.operator)) {
+        return cond;
+      }
+      const param = parameterByKey.get(cond.parameterKey);
+      if (param && !param.isNumeric) {
+        changed = true;
+        return { ...cond, operator: 'equals' as ParameterFilterOperator };
+      }
+      return cond;
+    });
+    if (changed) {
+      onChangeDraft(sanitized);
+    }
+  }, [draftConditions, onChangeDraft, parameterByKey, parameters.length]);
+
   const readyDraftConditions = useMemo(
     () => draftConditions.filter(isConditionReady),
     [draftConditions],
@@ -354,8 +376,17 @@ export const ParameterFilterBuilder: React.FC<ParameterFilterBuilderProps> = ({
           <div className="space-y-2">
             {draftConditions.map((cond, idx) => {
               const selectedParam = parameterByKey.get(cond.parameterKey);
+              const isParamNumeric = Boolean(selectedParam?.isNumeric);
+              const availableOperators = isParamNumeric
+                ? OPERATOR_OPTIONS
+                : OPERATOR_OPTIONS.filter((opt) => !opt.numericOnly);
               const needsVal = operatorNeedsValue(cond.operator);
               const isMulti = operatorIsMultiValue(cond.operator);
+              const isNumericOp = operatorIsNumericOnly(cond.operator);
+              const hasInvalidNumber =
+                isNumericOp &&
+                cond.value.trim().length > 0 &&
+                parseStrictNumber(cond.value) === null;
               const hasSuggestions =
                 Boolean(selectedParam) &&
                 (selectedParam?.distinctValues.length ?? 0) > 0;
@@ -396,8 +427,18 @@ export const ParameterFilterBuilder: React.FC<ParameterFilterBuilderProps> = ({
                         {selectedParam ? (
                           <div className="flex items-center justify-between gap-1 min-w-0">
                             <div className="min-w-0 flex-1">
-                              <div className="text-[9px] font-semibold uppercase tracking-wider text-pavasal-400 truncate">
-                                {selectedParam.group}
+                              <div className="flex items-center gap-1 min-w-0">
+                                <span className="text-[9px] font-semibold uppercase tracking-wider text-pavasal-400 truncate">
+                                  {selectedParam.group}
+                                </span>
+                                {selectedParam.isNumeric && (
+                                  <span
+                                    className="rounded bg-pavasal-500/15 px-1 py-px text-[8px] font-mono font-bold text-pavasal-400 shrink-0"
+                                    title="Parámetro numérico"
+                                  >
+                                    123
+                                  </span>
+                                )}
                               </div>
                               <div className="text-[11px] font-medium text-asphalt-100 truncate">
                                 {selectedParam.name}
@@ -446,7 +487,13 @@ export const ParameterFilterBuilder: React.FC<ParameterFilterBuilderProps> = ({
 
                     {/* Operator Selector */}
                     <select
-                      value={cond.operator}
+                      value={
+                        availableOperators.some(
+                          (opt) => opt.value === cond.operator,
+                        )
+                          ? cond.operator
+                          : 'equals'
+                      }
                       onChange={(e) => {
                         const nextOp = e.target
                           .value as ParameterFilterOperator;
@@ -458,7 +505,7 @@ export const ParameterFilterBuilder: React.FC<ParameterFilterBuilderProps> = ({
                       aria-label="Condición de filtrado"
                       className="w-full rounded border border-asphalt-700 bg-asphalt-900 px-2 py-1 text-[11px] text-asphalt-100 focus:border-pavasal-500 focus:outline-none"
                     >
-                      {OPERATOR_OPTIONS.map((opt) => (
+                      {availableOperators.map((opt) => (
                         <option key={opt.value} value={opt.value}>
                           {opt.label}
                         </option>
@@ -467,54 +514,70 @@ export const ParameterFilterBuilder: React.FC<ParameterFilterBuilderProps> = ({
 
                     {/* Value Input + Existing Values Dropdown */}
                     {needsVal && (
-                      <div
-                        ref={(el) => {
-                          if (el) {
-                            valueAnchorRefs.current.set(cond.id, el);
-                          } else {
-                            valueAnchorRefs.current.delete(cond.id);
-                          }
-                        }}
-                        className="flex items-stretch rounded border border-asphalt-700 bg-asphalt-900 focus-within:border-pavasal-500"
-                      >
-                        <input
-                          type="text"
-                          value={cond.value}
-                          onChange={(e) =>
-                            updateCondition(cond.id, { value: e.target.value })
-                          }
-                          onKeyDown={(e) => {
-                            if (
-                              e.key === 'Enter' &&
-                              readyDraftConditions.length > 0 &&
-                              !isIndexing
-                            ) {
-                              e.preventDefault();
-                              onApply(readyDraftConditions);
+                      <div className="space-y-1">
+                        <div
+                          ref={(el) => {
+                            if (el) {
+                              valueAnchorRefs.current.set(cond.id, el);
+                            } else {
+                              valueAnchorRefs.current.delete(cond.id);
                             }
                           }}
-                          placeholder={
-                            isMulti
-                              ? 'Separados por comas (ej: HA-25, HA-30)'
-                              : 'Escribe o elige un valor...'
-                          }
-                          className="flex-1 min-w-0 bg-transparent px-2 py-1 text-[11px] text-asphalt-100 placeholder-asphalt-500 focus:outline-none"
-                        />
-
-                        {hasSuggestions && (
-                          <button
-                            type="button"
-                            onClick={() => toggleValueDropdown(cond.id)}
-                            className="px-1.5 border-l border-asphalt-700 text-asphalt-300 hover:bg-asphalt-800 hover:text-pavasal-400 transition-colors text-[10px] shrink-0"
-                            title={
-                              isMulti
-                                ? 'Seleccionar uno o varios valores existentes'
-                                : 'Elegir entre los valores existentes en el modelo'
+                          className={`flex items-stretch rounded border bg-asphalt-900 ${
+                            hasInvalidNumber
+                              ? 'border-red-500/70 focus-within:border-red-500'
+                              : 'border-asphalt-700 focus-within:border-pavasal-500'
+                          }`}
+                        >
+                          <input
+                            type="text"
+                            inputMode={isNumericOp ? 'decimal' : undefined}
+                            value={cond.value}
+                            onChange={(e) =>
+                              updateCondition(cond.id, {
+                                value: e.target.value,
+                              })
                             }
-                            aria-label="Ver valores existentes"
-                          >
-                            ▾
-                          </button>
+                            onKeyDown={(e) => {
+                              if (
+                                e.key === 'Enter' &&
+                                readyDraftConditions.length > 0 &&
+                                !isIndexing
+                              ) {
+                                e.preventDefault();
+                                onApply(readyDraftConditions);
+                              }
+                            }}
+                            placeholder={
+                              isMulti
+                                ? 'Separados por comas (ej: HA-25, HA-30)'
+                                : isNumericOp
+                                  ? 'Escribe o elige un número (ej: 2.5)...'
+                                  : 'Escribe o elige un valor...'
+                            }
+                            className="flex-1 min-w-0 bg-transparent px-2 py-1 text-[11px] text-asphalt-100 placeholder-asphalt-500 focus:outline-none"
+                          />
+
+                          {hasSuggestions && (
+                            <button
+                              type="button"
+                              onClick={() => toggleValueDropdown(cond.id)}
+                              className="px-1.5 border-l border-asphalt-700 text-asphalt-300 hover:bg-asphalt-800 hover:text-pavasal-400 transition-colors text-[10px] shrink-0"
+                              title={
+                                isMulti
+                                  ? 'Seleccionar uno o varios valores existentes'
+                                  : 'Elegir entre los valores existentes en el modelo'
+                              }
+                              aria-label="Ver valores existentes"
+                            >
+                              ▾
+                            </button>
+                          )}
+                        </div>
+                        {hasInvalidNumber && (
+                          <p className="text-[10px] text-red-400 px-0.5">
+                            Introduce un valor numérico válido (ej: 10 o 2,5).
+                          </p>
                         )}
                       </div>
                     )}
@@ -609,8 +672,15 @@ export const ParameterFilterBuilder: React.FC<ParameterFilterBuilderProps> = ({
                           key={param.key}
                           type="button"
                           onClick={() => {
+                            const shouldResetOperator =
+                              !param.isNumeric &&
+                              currentRow &&
+                              operatorIsNumericOnly(currentRow.operator);
                             updateCondition(openParamRowId, {
                               parameterKey: param.key,
+                              ...(shouldResetOperator
+                                ? { operator: 'equals' }
+                                : {}),
                             });
                             setOpenParamRowId(null);
                           }}
@@ -621,8 +691,18 @@ export const ParameterFilterBuilder: React.FC<ParameterFilterBuilderProps> = ({
                           }`}
                         >
                           <div className="min-w-0 flex-1">
-                            <div className="text-[11px] truncate">
-                              {param.name}
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="text-[11px] truncate">
+                                {param.name}
+                              </span>
+                              {param.isNumeric && (
+                                <span
+                                  className="rounded bg-pavasal-500/15 px-1 py-px text-[8px] font-mono font-bold text-pavasal-400 shrink-0"
+                                  title="Parámetro numérico"
+                                >
+                                  123
+                                </span>
+                              )}
                             </div>
                             <div className="text-[9px] text-asphalt-400 truncate">
                               {param.group}
