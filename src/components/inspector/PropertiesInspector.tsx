@@ -7,6 +7,7 @@ import {
   type InspectorPropertyGroup,
 } from '../../utils/elementParameterFilter';
 import { useEngine } from '../../viewer/EngineContext';
+import { ColorByParameterControls } from '../viewer/ColorByParameterControls';
 import { SelectionAppearanceControls } from '../viewer/SelectionAppearanceControls';
 
 const renderPropertyValue = (val: unknown): React.ReactNode => {
@@ -85,12 +86,16 @@ export const PropertiesInspector: React.FC = () => {
 
   if (!selectedElementId) {
     return (
-      <div className="text-center text-xs text-asphalt-300 mt-8 px-4">
-        <p className="font-semibold text-asphalt-100">Inspector de Elementos</p>
-        <p className="mt-1.5 text-asphalt-400 leading-relaxed">
-          Haz clic en cualquier elemento 3D o selecciona un elemento en la
-          pestaña Elementos para consultar sus propiedades IFC.
-        </p>
+      <div className="space-y-4 text-xs">
+        <ColorByParameterControls />
+
+        <div className="text-center text-xs text-asphalt-300 mt-6 px-4">
+          <p className="font-semibold text-asphalt-100">Inspector de Elementos</p>
+          <p className="mt-1.5 text-asphalt-400 leading-relaxed">
+            Haz clic en cualquier elemento 3D o selecciona un elemento en la
+            pestaña Elementos para consultar sus propiedades IFC.
+          </p>
+        </div>
       </div>
     );
   }
@@ -244,6 +249,9 @@ export const PropertiesInspector: React.FC = () => {
         </div>
         <SelectionAppearanceControls compact />
       </div>
+
+      {/* Assign Color By Parameter (All Shown Elements) */}
+      <ColorByParameterControls />
 
       {/* Properties Search & Summary Header */}
       {isLoadingProperties ? (

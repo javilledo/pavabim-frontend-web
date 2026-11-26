@@ -980,6 +980,12 @@ const modelParameterIndexCache = new WeakMap<
   Promise<ModelParameterIndex>
 >();
 
+export function getCachedModelParameterIndex(
+  model: FRAGS.FragmentsModel,
+): Promise<ModelParameterIndex> | undefined {
+  return modelParameterIndexCache.get(model);
+}
+
 export function getOrBuildModelParameterIndex(
   model: FRAGS.FragmentsModel,
   modelId: string,

@@ -1,5 +1,6 @@
 import React from 'react';
 import { useAutoConvertProjectModels } from '../../hooks/useAutoConvertProjectModels';
+import { useColorByParameterSync } from '../../hooks/useColorByParameterSync';
 import { RibbonToolbar } from './RibbonToolbar';
 import { LeftSidebar } from './LeftSidebar';
 import { RightSidebar } from './RightSidebar';
@@ -7,6 +8,7 @@ import { ViewerCanvas } from '../../viewer/ViewerCanvas';
 
 export const MainLayout: React.FC = () => {
   useAutoConvertProjectModels();
+  useColorByParameterSync();
 
   return (
     <div className="w-screen h-screen flex flex-col overflow-hidden bg-asphalt-950 text-asphalt-50">

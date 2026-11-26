@@ -124,6 +124,10 @@ export interface EngineContextValue {
   setSelectedElementsTransparency: (transparencyPct: number | null) => Promise<void>;
   resetSelectedElementsAppearance: () => Promise<void>;
   resetAllCustomAppearances: () => Promise<void>;
+  applyCustomAppearancesMap: (
+    nextMap: Record<string, Record<number, ElementAppearanceOverride>>,
+    suppressSelectOverlay?: boolean
+  ) => Promise<void>;
   captureSnapshotBlob: () => Promise<Blob | null>;
   getCameraViewpoint: () => CameraViewpointData | null;
   setCameraViewpoint: (data: CameraViewpointData) => Promise<void>;
@@ -3046,6 +3050,17 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     await syncCustomAppearancesToHighlighter(false);
   }, [clearCustomAppearances, syncCustomAppearancesToHighlighter]);
 
+  const applyCustomAppearancesMap = useCallback(
+    async (
+      nextMap: Record<string, Record<number, ElementAppearanceOverride>>,
+      suppressSelectOverlay = true
+    ) => {
+      setCustomAppearances(nextMap);
+      await syncCustomAppearancesToHighlighter(suppressSelectOverlay);
+    },
+    [setCustomAppearances, syncCustomAppearancesToHighlighter]
+  );
+
   const captureSnapshotBlob = useCallback(async (): Promise<Blob | null> => {
     const world = worldRef.current;
     if (!world || !world.renderer) return null;
@@ -4943,6 +4958,7 @@ export const EngineProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setSelectedElementsTransparency,
         resetSelectedElementsAppearance,
         resetAllCustomAppearances,
+        applyCustomAppearancesMap,
         captureSnapshotBlob,
         getCameraViewpoint,
         setCameraViewpoint,

@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import type { ModelStatusResponse, ProjectWithRole } from '../types/api.types';
 import type { CameraViewpointData } from '../types/bcf.types';
+import type { ColorParameterGroup } from '../utils/colorByParameter';
+import type { ParameterDefinition } from '../utils/elementParameterFilter';
 
 export type ActiveTool =
   | 'orbit'
@@ -101,6 +103,12 @@ interface ViewerState {
   customAppearancesMap: Record<string, Record<number, ElementAppearanceOverride>>;
   customAppearanceCount: number;
   isIsolationActive: boolean;
+  isolationRevision: number;
+  colorByParameterKey: string | null;
+  colorByParameterCustomColors: Record<string, Record<string, string>>;
+  colorByParameterAvailableParams: ParameterDefinition[];
+  colorByParameterGroups: ColorParameterGroup[];
+  isColorByParameterIndexing: boolean;
   localViewpoints: LocalViewpoint[];
 
   // Backend Project & BCF Context
@@ -147,6 +155,18 @@ interface ViewerState {
     map: Record<string, Record<number, ElementAppearanceOverride>>,
   ) => void;
   clearCustomAppearances: () => void;
+  setColorByParameterKey: (parameterKey: string | null) => void;
+  setColorByParameterGroupColor: (
+    parameterKey: string,
+    valueKey: string,
+    hexColor: string,
+  ) => void;
+  resetColorByParameterColors: (parameterKey: string) => void;
+  setColorByParameterState: (patch: {
+    availableParams?: ParameterDefinition[];
+    groups?: ColorParameterGroup[];
+    isIndexing?: boolean;
+  }) => void;
   addLocalViewpoint: (vp: LocalViewpoint) => void;
   removeLocalViewpoint: (id: string) => void;
 
@@ -179,6 +199,12 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   customAppearancesMap: {},
   customAppearanceCount: 0,
   isIsolationActive: false,
+  isolationRevision: 0,
+  colorByParameterKey: null,
+  colorByParameterCustomColors: {},
+  colorByParameterAvailableParams: [],
+  colorByParameterGroups: [],
+  isColorByParameterIndexing: false,
   localViewpoints: [],
 
   projects: [],
@@ -278,6 +304,12 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         customAppearancesMap: {},
         customAppearanceCount: 0,
         isIsolationActive: false,
+        isolationRevision: 0,
+        colorByParameterKey: null,
+        colorByParameterCustomColors: {},
+        colorByParameterAvailableParams: [],
+        colorByParameterGroups: [],
+        isColorByParameterIndexing: false,
         selectedElementId: null,
         selectedModelId: null,
         selectedElementProperties: null,
@@ -378,10 +410,18 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       return { hiddenElementsMap: nextHidden };
     }),
 
-  setIsolationActive: (isIsolationActive) => set({ isIsolationActive }),
+  setIsolationActive: (isIsolationActive) =>
+    set((state) => ({
+      isIsolationActive,
+      isolationRevision: isIsolationActive ? state.isolationRevision + 1 : 0,
+    })),
 
   clearHiddenElements: () =>
-    set({ hiddenElementsMap: {}, isIsolationActive: false }),
+    set({
+      hiddenElementsMap: {},
+      isIsolationActive: false,
+      isolationRevision: 0,
+    }),
 
   setCustomAppearances: (customAppearancesMap) =>
     set({
@@ -393,7 +433,60 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     set({
       customAppearancesMap: {},
       customAppearanceCount: 0,
+      colorByParameterKey: null,
+      colorByParameterGroups: [],
     }),
+
+  setColorByParameterKey: (colorByParameterKey) =>
+    set((state) => ({
+      colorByParameterKey,
+      ...(colorByParameterKey === null ? { colorByParameterGroups: [] } : {}),
+      ...(colorByParameterKey !== state.colorByParameterKey &&
+      colorByParameterKey !== null
+        ? { colorByParameterGroups: [] }
+        : {}),
+    })),
+
+  setColorByParameterGroupColor: (parameterKey, valueKey, hexColor) =>
+    set((state) => {
+      const normalized = hexColor.toLowerCase();
+      const prevForParam = state.colorByParameterCustomColors[parameterKey] ?? {};
+      return {
+        colorByParameterCustomColors: {
+          ...state.colorByParameterCustomColors,
+          [parameterKey]: {
+            ...prevForParam,
+            [valueKey]: normalized,
+          },
+        },
+      };
+    }),
+
+  resetColorByParameterColors: (parameterKey) =>
+    set((state) => {
+      if (!(parameterKey in state.colorByParameterCustomColors)) return state;
+      const next = { ...state.colorByParameterCustomColors };
+      delete next[parameterKey];
+      return { colorByParameterCustomColors: next };
+    }),
+
+  setColorByParameterState: (patch) =>
+    set((state) => ({
+      ...(patch.availableParams !== undefined
+        ? { colorByParameterAvailableParams: patch.availableParams }
+        : {}),
+      ...(patch.groups !== undefined
+        ? { colorByParameterGroups: patch.groups }
+        : {}),
+      ...(patch.isIndexing !== undefined
+        ? { isColorByParameterIndexing: patch.isIndexing }
+        : {}),
+      ...(patch.availableParams === undefined &&
+      patch.groups === undefined &&
+      patch.isIndexing === undefined
+        ? state
+        : {}),
+    })),
 
   addLocalViewpoint: (vp) =>
     set((state) => ({
@@ -450,6 +543,12 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
               customAppearancesMap: {},
               customAppearanceCount: 0,
               isIsolationActive: false,
+              isolationRevision: 0,
+              colorByParameterKey: null,
+              colorByParameterCustomColors: {},
+              colorByParameterAvailableParams: [],
+              colorByParameterGroups: [],
+              isColorByParameterIndexing: false,
               isSectionActive: false,
               isSectionGizmosVisible: true,
               ...(state.activeTool === 'section'
@@ -490,6 +589,12 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       customAppearancesMap: {},
       customAppearanceCount: 0,
       isIsolationActive: false,
+      isolationRevision: 0,
+      colorByParameterKey: null,
+      colorByParameterCustomColors: {},
+      colorByParameterAvailableParams: [],
+      colorByParameterGroups: [],
+      isColorByParameterIndexing: false,
       isSectionActive: false,
       isSectionGizmosVisible: true,
       ...(state.activeTool === 'section' ? { activeTool: 'select' as const } : {}),
