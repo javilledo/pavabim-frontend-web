@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as THREE from 'three';
 import { useLocalFragUpload } from '../hooks/useLocalFragUpload';
+import { useProjectRole } from '../hooks/useProjectRole';
 import { useViewerStore } from '../store/useViewerStore';
 import { computeMeasurementBetweenTargets } from '../utils/measureGeometry';
 import { formatCoordinateEs, formatDecimalEs } from '../utils/numberFormat';
@@ -18,6 +19,7 @@ interface FaceContextMenuState {
   x: number;
   y: number;
   faceHit: SurfaceFaceHit | null;
+  elementHit: { modelId: string; localId: number } | null;
   sectionPlaneId: string | null;
 }
 
@@ -65,6 +67,7 @@ export const ViewerCanvas: React.FC = () => {
     initEngine,
     disposeEngine,
     clearSelection,
+    focusSelectionMap,
     selectElementsInScreenRect,
     toggleHideSelectedElements,
     pickFaceAtClientPoint,
@@ -98,7 +101,9 @@ export const ViewerCanvas: React.FC = () => {
     currentProjectId,
     setActiveTool,
     setViewerToastError,
+    openCreateBcfTopic,
   } = useViewerStore();
+  const { canEditBcf } = useProjectRole();
   const activeToolRef = useRef(activeTool);
   activeToolRef.current = activeTool;
   const measureModeRef = useRef(measureMode);
@@ -942,19 +947,33 @@ export const ViewerCanvas: React.FC = () => {
     const clientX = e.clientX;
     const clientY = e.clientY;
     const sectionPlaneId = pickSectionPlaneAtClientPoint(clientX, clientY);
-    const faceHit = await pickFaceAtClientPoint(clientX, clientY);
+    const [faceHit, volHit] = await Promise.all([
+      pickFaceAtClientPoint(clientX, clientY),
+      pickVolumeElementAtClientPoint(clientX, clientY, { hoverOnly: true }),
+    ]);
     if (reqId !== contextMenuReqIdRef.current) return;
 
-    if (!faceHit && !sectionPlaneId) {
+    const elementHit = volHit
+      ? { modelId: volHit.modelId, localId: volHit.localId }
+      : null;
+    const canCreateTopicHere = Boolean(
+      currentProjectId && canEditBcf && (faceHit || elementHit),
+    );
+
+    if (!faceHit && !sectionPlaneId && !canCreateTopicHere) {
       setFaceContextMenu(null);
       return;
     }
 
     const menuWidth = 216;
-    const menuHeight = faceHit && sectionPlaneId ? 124 : faceHit ? 84 : 44;
+    const itemCount =
+      (faceHit ? 2 : 0) +
+      (canCreateTopicHere ? 1 : 0) +
+      (sectionPlaneId ? 1 : 0);
+    const menuHeight = Math.max(44, itemCount * 34 + 16);
     const x = Math.min(clientX, Math.max(8, window.innerWidth - menuWidth - 8));
     const y = Math.min(clientY, Math.max(8, window.innerHeight - menuHeight - 8));
-    setFaceContextMenu({ x, y, faceHit, sectionPlaneId });
+    setFaceContextMenu({ x, y, faceHit, elementHit, sectionPlaneId });
   };
 
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
@@ -1283,9 +1302,54 @@ export const ViewerCanvas: React.FC = () => {
               </button>
             </>
           )}
-          {faceContextMenu.faceHit && faceContextMenu.sectionPlaneId && (
-            <div className="my-1 h-px bg-asphalt-700" />
-          )}
+          {currentProjectId &&
+            canEditBcf &&
+            (faceContextMenu.faceHit || faceContextMenu.elementHit) && (
+              <>
+                {faceContextMenu.faceHit && (
+                  <div className="my-1 h-px bg-asphalt-700" />
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const hit = faceContextMenu.elementHit;
+                    setFaceContextMenu(null);
+                    if (hit) {
+                      const existingIds = selectedElementsMap[hit.modelId] ?? [];
+                      if (!existingIds.includes(hit.localId)) {
+                        void focusSelectionMap(
+                          { [hit.modelId]: [hit.localId] },
+                          false,
+                        );
+                      }
+                    }
+                    openCreateBcfTopic();
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-asphalt-100 hover:bg-pavasal-500 hover:text-asphalt-950 transition-colors"
+                >
+                  <svg
+                    className="w-3.5 h-3.5 shrink-0"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M2.5 3.5h11a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6l-3 2.5v-2.5h-2a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z" />
+                    <path d="M8 5.5v4M6 7.5h4" />
+                  </svg>
+                  <span>Crear nuevo tópico</span>
+                </button>
+              </>
+            )}
+          {(faceContextMenu.faceHit ||
+            (currentProjectId && canEditBcf && faceContextMenu.elementHit)) &&
+            faceContextMenu.sectionPlaneId && (
+              <div className="my-1 h-px bg-asphalt-700" />
+            )}
           {faceContextMenu.sectionPlaneId && (
             <button
               type="button"

@@ -6,6 +6,7 @@ import { bcfService } from '../api/bcf.service';
 import { useAuth } from '../auth/AuthProvider';
 import { useViewerStore } from '../store/useViewerStore';
 import type { BcfTopic, BcfViewpoint } from '../types/bcf.types';
+import { translateTopicStatus } from '../utils/bcfLabels';
 import { useEngine } from '../viewer/EngineContext';
 
 function getPinAccentColor(topic: BcfTopic): string {
@@ -175,7 +176,7 @@ export function useBcfScenePins(): void {
         btn.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.55)';
         btn.style.userSelect = 'none';
         btn.style.whiteSpace = 'nowrap';
-        btn.title = `${code} · ${topic.title} (${topic.topic_status})`;
+        btn.title = `${code} · ${topic.title} (${translateTopicStatus(topic.topic_status)})`;
 
         const dot = document.createElement('span');
         dot.style.width = '8px';

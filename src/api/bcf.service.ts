@@ -644,18 +644,57 @@ export const bcfService = {
   ): Promise<BcfViewpoint> {
     const url = `${topicBase(projectId, topicId)}/viewpoints`;
 
+    // Prefer application/json whenever total serialized payload fits under Express's 100KB default limit,
+    // ensuring camera_data / perspective_camera / orthogonal_camera / components are parsed as native objects.
+    if (!payload.snapshotFile) {
+      const jsonPayload: Omit<CreateViewpointPayload, 'snapshotFile'> & {
+        snapshotFile?: File | Blob;
+      } = { ...payload };
+      delete jsonPayload.snapshotFile;
+
+      const serializedLength = JSON.stringify(jsonPayload).length;
+      if (serializedLength <= 96000) {
+        const { data } = await apiClient.post<BcfViewpoint>(url, jsonPayload, {
+          timeout: 90000,
+        });
+        return data;
+      }
+
+      // If large component exception arrays push JSON over 96KB, trim exceptions to fit JSON first
+      if (jsonPayload.components?.visibility?.exceptions) {
+        const compactPayload: typeof jsonPayload = {
+          ...jsonPayload,
+          components: {
+            ...jsonPayload.components,
+            visibility: {
+              default_visibility:
+                jsonPayload.components.visibility.default_visibility,
+            },
+          },
+        };
+        if (JSON.stringify(compactPayload).length <= 96000) {
+          const { data } = await apiClient.post<BcfViewpoint>(
+            url,
+            compactPayload,
+            { timeout: 90000 },
+          );
+          return data;
+        }
+      }
+    }
+
     let binarySnapshot: File | Blob | undefined = payload.snapshotFile;
-    let snapshotExt = 'png';
+    let snapshotExt = 'jpg';
     if (!binarySnapshot && payload.snapshot?.snapshot_data) {
       try {
         const converted = dataUrlOrBase64ToBlob(
           payload.snapshot.snapshot_data,
-          payload.snapshot.snapshot_type || 'png',
+          payload.snapshot.snapshot_type || 'jpg',
         );
         binarySnapshot = converted.blob;
         snapshotExt = converted.ext;
       } catch {
-        // Fallback to JSON if base64 decoding fails
+        // Fallback to JSON below
       }
     }
 
@@ -667,9 +706,6 @@ export const bcfService = {
           : `snapshot-${Date.now()}.${snapshotExt}`;
       formData.append('snapshot', binarySnapshot, filename);
 
-      if (payload.guid) {
-        formData.append('guid', payload.guid);
-      }
       if (payload.index !== undefined) {
         formData.append('index', String(payload.index));
       }

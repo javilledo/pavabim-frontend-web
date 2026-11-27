@@ -18,7 +18,53 @@ import type {
 } from '../types/bcf.types';
 
 export const BCF_MAX_SELECTION_LIMIT = 1000;
-export const BCF_MAX_SNAPSHOT_DIMENSION = 1500;
+export const BCF_MAX_SNAPSHOT_DIMENSION = 1280;
+export const BCF_MAX_JSON_DATAURL_CHARS = 68000;
+
+export function compressCanvasToBudgetDataUrl(
+  sourceCanvas: HTMLCanvasElement,
+  maxChars = BCF_MAX_JSON_DATAURL_CHARS,
+): { dataUrl: string; width: number; height: number } {
+  const srcW = Math.max(1, sourceCanvas.width);
+  const srcH = Math.max(1, sourceCanvas.height);
+
+  const attempts = [
+    { maxDim: 1280, quality: 0.82 },
+    { maxDim: 1080, quality: 0.76 },
+    { maxDim: 920, quality: 0.7 },
+    { maxDim: 760, quality: 0.65 },
+    { maxDim: 640, quality: 0.58 },
+  ];
+
+  let lastResult = { dataUrl: '', width: srcW, height: srcH };
+
+  for (const attempt of attempts) {
+    const longest = Math.max(srcW, srcH);
+    const scale = longest > attempt.maxDim ? attempt.maxDim / longest : 1;
+    const targetW = Math.max(1, Math.round(srcW * scale));
+    const targetH = Math.max(1, Math.round(srcH * scale));
+
+    const offscreen = document.createElement('canvas');
+    offscreen.width = targetW;
+    offscreen.height = targetH;
+    const ctx = offscreen.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#18191c';
+      ctx.fillRect(0, 0, targetW, targetH);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(sourceCanvas, 0, 0, targetW, targetH);
+    }
+
+    const dataUrl = offscreen.toDataURL('image/jpeg', attempt.quality);
+    lastResult = { dataUrl, width: targetW, height: targetH };
+    if (dataUrl.length <= maxChars) {
+      return lastResult;
+    }
+  }
+
+  return lastResult;
+}
 
 export class BcfSelectionLimitError extends Error {
   readonly selectedCount: number;
@@ -69,6 +115,151 @@ export interface BcfBridgeEngineDeps {
 function round6(value: number): number {
   const cleaned = Math.round((value + Number.EPSILON) * 1e6) / 1e6;
   return Object.is(cleaned, -0) ? 0 : cleaned;
+}
+
+function tryParseJson<T>(raw: unknown): T | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    try {
+      return JSON.parse(trimmed) as T;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof raw === 'object') {
+    return raw as T;
+  }
+  return null;
+}
+
+function toValidPoint3D(raw: unknown): BcfPoint3D | null {
+  const obj = tryParseJson<Record<string, unknown>>(raw);
+  if (!obj) return null;
+  const x = Number(obj.x);
+  const y = Number(obj.y);
+  const z = Number(obj.z);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+    return null;
+  }
+  return { x, y, z };
+}
+
+interface NormalizedViewpointCamera {
+  kind: 'bcf' | 'legacy';
+  isOrtho: boolean;
+  viewPoint?: BcfPoint3D;
+  direction?: BcfDirection3D;
+  upVector?: BcfDirection3D;
+  fov?: number;
+  viewToWorldScale?: number;
+  legacyPosition?: BcfPoint3D;
+  legacyTarget?: BcfPoint3D;
+}
+
+function normalizeViewpointPayload(rawVp: BcfViewpoint): {
+  components: BcfComponents | null;
+  clippingPlanes: BcfClippingPlane[];
+  camera: NormalizedViewpointCamera | null;
+} {
+  const parsedComponents = tryParseJson<BcfComponents>(rawVp.components);
+  const rawPlanes = Array.isArray(rawVp.clipping_planes)
+    ? rawVp.clipping_planes
+    : (tryParseJson<unknown[]>(rawVp.clipping_planes) ?? []);
+
+  const clippingPlanes: BcfClippingPlane[] = [];
+  for (const item of rawPlanes) {
+    const planeObj = tryParseJson<Record<string, unknown>>(item);
+    if (!planeObj) continue;
+    const loc = toValidPoint3D(planeObj.location);
+    const dir = toValidPoint3D(planeObj.direction);
+    if (loc && dir) {
+      clippingPlanes.push({ location: loc, direction: dir });
+    }
+  }
+
+  const persp = tryParseJson<Record<string, unknown>>(rawVp.perspective_camera);
+  const ortho = tryParseJson<Record<string, unknown>>(rawVp.orthogonal_camera);
+  const unified = tryParseJson<Record<string, unknown>>(rawVp.camera_data);
+  const rawCam = tryParseJson<Record<string, unknown>>(rawVp.camera);
+
+  const tryExtractBcfCam = (
+    cand: Record<string, unknown> | null,
+    isOrthoHint: boolean,
+  ): NormalizedViewpointCamera | null => {
+    if (!cand) return null;
+    const vp = toValidPoint3D(cand.camera_view_point ?? cand.cameraViewPoint);
+    const dir = toValidPoint3D(cand.camera_direction ?? cand.cameraDirection);
+    if (!vp || !dir) return null;
+    const up =
+      toValidPoint3D(cand.camera_up_vector ?? cand.cameraUpVector) ?? {
+        x: 0,
+        y: 0,
+        z: 1,
+      };
+    const fovNum = Number(cand.field_of_view ?? cand.fieldOfView);
+    const scaleNum = Number(
+      cand.view_to_world_scale ?? cand.viewToWorldScale,
+    );
+    const isOrtho =
+      isOrthoHint ||
+      (!Number.isFinite(fovNum) && Number.isFinite(scaleNum) && scaleNum > 0);
+
+    return {
+      kind: 'bcf',
+      isOrtho,
+      viewPoint: vp,
+      direction: dir,
+      upVector: up,
+      fov: Number.isFinite(fovNum) && fovNum > 0 ? fovNum : undefined,
+      viewToWorldScale:
+        Number.isFinite(scaleNum) && scaleNum > 0 ? scaleNum : undefined,
+    };
+  };
+
+  const bcfCam =
+    tryExtractBcfCam(ortho, true) ??
+    tryExtractBcfCam(persp, false) ??
+    tryExtractBcfCam(unified, rawVp.camera_type === 'orthogonal') ??
+    tryExtractBcfCam(rawCam, rawVp.camera_type === 'orthogonal') ??
+    (rawCam && 'camera_data' in rawCam
+      ? tryExtractBcfCam(
+          tryParseJson<Record<string, unknown>>(rawCam.camera_data),
+          rawCam.camera_type === 'orthogonal',
+        )
+      : null);
+
+  if (bcfCam) {
+    return {
+      components: parsedComponents,
+      clippingPlanes,
+      camera: bcfCam,
+    };
+  }
+
+  if (rawCam) {
+    const legacyPos = toValidPoint3D(rawCam.position);
+    const legacyTgt = toValidPoint3D(rawCam.target);
+    if (legacyPos && legacyTgt) {
+      return {
+        components: parsedComponents,
+        clippingPlanes,
+        camera: {
+          kind: 'legacy',
+          isOrtho: rawCam.isPerspective === false,
+          legacyPosition: legacyPos,
+          legacyTarget: legacyTgt,
+        },
+      };
+    }
+  }
+
+  return {
+    components: parsedComponents,
+    clippingPlanes,
+    camera: null,
+  };
 }
 
 function resolveReferenceModel(
@@ -303,30 +494,8 @@ export function parseBcfColor(bcfColor: string): {
 
 function renderScaledSnapshotPng(
   sourceCanvas: HTMLCanvasElement,
-  maxDimension = BCF_MAX_SNAPSHOT_DIMENSION,
 ): { dataUrl: string; width: number; height: number } {
-  const srcW = Math.max(1, sourceCanvas.width);
-  const srcH = Math.max(1, sourceCanvas.height);
-  const longest = Math.max(srcW, srcH);
-  const scale = longest > maxDimension ? maxDimension / longest : 1;
-  const targetW = Math.max(1, Math.round(srcW * scale));
-  const targetH = Math.max(1, Math.round(srcH * scale));
-
-  const offscreen = document.createElement('canvas');
-  offscreen.width = targetW;
-  offscreen.height = targetH;
-  const ctx = offscreen.getContext('2d');
-  if (ctx) {
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(sourceCanvas, 0, 0, targetW, targetH);
-  }
-
-  return {
-    dataUrl: offscreen.toDataURL('image/png'),
-    width: targetW,
-    height: targetH,
-  };
+  return compressCanvasToBudgetDataUrl(sourceCanvas);
 }
 
 function getVisibleModelsCombinedBox(
@@ -585,10 +754,10 @@ export async function captureCurrentViewpointDraft(
     }
   }
 
-  // 5. Render WebGL canvas snapshot scaled to max 1500px
+  // 5. Render WebGL canvas snapshot compressed within JSON budget
   world.renderer?.update();
   const rendered = domCanvas
-    ? renderScaledSnapshotPng(domCanvas, BCF_MAX_SNAPSHOT_DIMENSION)
+    ? renderScaledSnapshotPng(domCanvas)
     : { dataUrl: '', width: 0, height: 0 };
 
   const payload: CreateViewpointPayload = {
@@ -622,7 +791,7 @@ export async function captureCurrentViewpointDraft(
     ...(rendered.dataUrl
       ? {
           snapshot: {
-            snapshot_type: 'png',
+            snapshot_type: 'jpg',
             snapshot_data: rendered.dataUrl,
           },
         }
@@ -655,16 +824,44 @@ export async function applyViewpointToEngine(
     clearSections,
   } = deps;
 
+  const normalized = normalizeViewpointPayload(viewpoint);
+  if (!normalized.camera) {
+    console.warn(
+      '[BcfViewerBridge] El punto de vista recibido no incluye coordenadas de cámara:',
+      viewpoint,
+    );
+    throw new Error(
+      'Este punto de vista no contiene coordenadas de cámara guardadas en el servidor. Añade un nuevo punto de vista al tópico para registrar la cámara 3D.',
+    );
+  }
+
+  const activeProjectId = useViewerStore.getState().currentProjectId;
+  const hasVisibleLoadedModel = useViewerStore
+    .getState()
+    .loadedModels.some(
+      (m) => m.visible && (!m.projectId || m.projectId === activeProjectId),
+    );
+  if (!hasVisibleLoadedModel) {
+    throw new Error(
+      'Carga y activa primero el modelo 3D en la pestaña "Modelos" para poder ir a este punto de vista.',
+    );
+  }
+
   const { yupToWorldMatrix } = await resolveIfcTransformMatrices(fragments);
 
   // 1. Visibility: restore default_visibility and apply exceptions
-  const vis = viewpoint.components?.visibility;
+  const vis = tryParseJson<BcfComponents['visibility']>(
+    normalized.components?.visibility,
+  );
   if (vis) {
     await showAllElements();
     const hider = components.get(OBC.Hider);
     const defaultVis = vis.default_visibility !== false;
-    const exceptionGuids = (vis.exceptions ?? [])
-      .map((c) => c.ifc_guid)
+    const rawExceptions = Array.isArray(vis.exceptions)
+      ? vis.exceptions
+      : (tryParseJson<Array<{ ifc_guid?: string }>>(vis.exceptions) ?? []);
+    const exceptionGuids = rawExceptions
+      .map((c) => c?.ifc_guid)
       .filter((g): g is string => Boolean(g));
 
     if (defaultVis) {
@@ -696,7 +893,10 @@ export async function applyViewpointToEngine(
   }
 
   // 2. Coloring: apply custom component colors (if any) or reset previous ones
-  const coloringList = viewpoint.components?.coloring ?? [];
+  const coloringList = Array.isArray(normalized.components?.coloring)
+    ? normalized.components!.coloring!
+    : (tryParseJson<BcfComponentColoring[]>(normalized.components?.coloring) ??
+      []);
   if (coloringList.length > 0) {
     const nextAppearances: Record<
       string,
@@ -704,10 +904,11 @@ export async function applyViewpointToEngine(
     > = {};
 
     for (const entry of coloringList) {
+      if (!entry?.color) continue;
       const parsedColor = parseBcfColor(entry.color);
       if (!parsedColor) continue;
       const entryGuids = (entry.components ?? [])
-        .map((c) => c.ifc_guid)
+        .map((c) => c?.ifc_guid)
         .filter((g): g is string => Boolean(g));
       if (entryGuids.length === 0) continue;
 
@@ -730,8 +931,13 @@ export async function applyViewpointToEngine(
 
   // 3. Selection: clear previous selection & highlight BCF selection components
   await clearSelection();
-  const selectionGuids = (viewpoint.components?.selection ?? [])
-    .map((c) => c.ifc_guid)
+  const rawSelection = Array.isArray(normalized.components?.selection)
+    ? normalized.components!.selection!
+    : (tryParseJson<Array<{ ifc_guid?: string }>>(
+        normalized.components?.selection,
+      ) ?? []);
+  const selectionGuids = rawSelection
+    .map((c) => c?.ifc_guid)
     .filter((g): g is string => Boolean(g));
 
   let selectionModelMap: OBC.ModelIdMap = {};
@@ -748,16 +954,12 @@ export async function applyViewpointToEngine(
 
   // 4. Clipping Planes: destroy current planes & recreate BCF clipping_planes
   clearSections();
-  if (
-    clipper &&
-    viewpoint.clipping_planes &&
-    viewpoint.clipping_planes.length > 0
-  ) {
+  if (clipper && normalized.clippingPlanes.length > 0) {
     const isGizmosVisible = useViewerStore.getState().isSectionGizmosVisible;
     clipper.enabled = true;
     clipper.visible = isGizmosVisible;
 
-    for (const cp of viewpoint.clipping_planes) {
+    for (const cp of normalized.clippingPlanes) {
       const worldOrigin = ifcZUpPointToWorld(cp.location, yupToWorldMatrix);
       const cutDirWorld = ifcZUpDirectionToWorld(
         cp.direction,
@@ -784,34 +986,21 @@ export async function applyViewpointToEngine(
   }
 
   // 5. Camera: convert BCF Z-up -> Three.js Y-up & smoothly tween camera
-  const isOrthoVp =
-    viewpoint.camera_type === 'orthogonal' ||
-    Boolean(viewpoint.orthogonal_camera);
-  const orthoCamData =
-    viewpoint.orthogonal_camera ??
-    (isOrthoVp ? viewpoint.camera_data : undefined);
-  const perspCamData =
-    viewpoint.perspective_camera ??
-    (!isOrthoVp ? viewpoint.camera_data : undefined);
-  const activeCam = orthoCamData ?? perspCamData;
-
-  if (activeCam) {
-    const targetProjection = isOrthoVp ? 'Orthographic' : 'Perspective';
+  const normCam = normalized.camera;
+  if (normCam?.kind === 'bcf' && normCam.viewPoint && normCam.direction) {
+    const targetProjection = normCam.isOrtho ? 'Orthographic' : 'Perspective';
     if (world.camera.projection.current !== targetProjection) {
       await setCameraProjection(targetProjection);
     }
 
-    const worldPos = ifcZUpPointToWorld(
-      activeCam.camera_view_point,
-      yupToWorldMatrix,
-    );
+    const worldPos = ifcZUpPointToWorld(normCam.viewPoint, yupToWorldMatrix);
     const worldDir = ifcZUpDirectionToWorld(
-      activeCam.camera_direction,
+      normCam.direction,
       yupToWorldMatrix,
     );
 
-    if (!isOrthoVp && perspCamData?.field_of_view) {
-      const fov = THREE.MathUtils.clamp(perspCamData.field_of_view, 5, 140);
+    if (!normCam.isOrtho && normCam.fov) {
+      const fov = THREE.MathUtils.clamp(normCam.fov, 5, 140);
       world.camera.threePersp.fov = fov;
       world.camera.threePersp.updateProjectionMatrix();
     }
@@ -854,24 +1043,28 @@ export async function applyViewpointToEngine(
     );
 
     if (
-      isOrthoVp &&
-      orthoCamData?.view_to_world_scale &&
-      orthoCamData.view_to_world_scale > 0
+      normCam.isOrtho &&
+      normCam.viewToWorldScale &&
+      normCam.viewToWorldScale > 0
     ) {
       const orthoThree = world.camera.threeOrtho;
       const frustumHeight = Math.abs(orthoThree.top - orthoThree.bottom);
       if (frustumHeight > 1e-6) {
         const nextZoom = THREE.MathUtils.clamp(
-          frustumHeight / orthoCamData.view_to_world_scale,
+          frustumHeight / normCam.viewToWorldScale,
           controls.minZoom,
           controls.maxZoom,
         );
         await controls.zoomTo(nextZoom, true);
       }
     }
-  } else if (viewpoint.camera) {
-    // Legacy viewer-space camera fallback
-    const { position: p, target: t } = viewpoint.camera;
+  } else if (
+    normCam?.kind === 'legacy' &&
+    normCam.legacyPosition &&
+    normCam.legacyTarget
+  ) {
+    const p = normCam.legacyPosition;
+    const t = normCam.legacyTarget;
     void world.camera.controls.setFocalOffset(0, 0, 0, true);
     await world.camera.controls.setLookAt(
       p.x,
@@ -896,9 +1089,16 @@ export async function resolveViewpointPinWorldPosition(
 ): Promise<THREE.Vector3 | null> {
   if (!fragments.initialized) return null;
 
+  const normalized = normalizeViewpointPayload(viewpoint);
+
   // 1. Prefer centroid of selected elements in the viewpoint
-  const selectionGuids = (viewpoint.components?.selection ?? [])
-    .map((c) => c.ifc_guid)
+  const rawSelection = Array.isArray(normalized.components?.selection)
+    ? normalized.components!.selection!
+    : (tryParseJson<Array<{ ifc_guid?: string }>>(
+        normalized.components?.selection,
+      ) ?? []);
+  const selectionGuids = rawSelection
+    .map((c) => c?.ifc_guid)
     .filter((g): g is string => Boolean(g));
 
   if (selectionGuids.length > 0) {
@@ -910,19 +1110,12 @@ export async function resolveViewpointPinWorldPosition(
   }
 
   // 2. Otherwise project ray from camera_view_point along camera_direction
-  const activeCam =
-    viewpoint.perspective_camera ??
-    viewpoint.orthogonal_camera ??
-    viewpoint.camera_data;
-
-  if (activeCam) {
+  const normCam = normalized.camera;
+  if (normCam?.kind === 'bcf' && normCam.viewPoint && normCam.direction) {
     const { yupToWorldMatrix } = await resolveIfcTransformMatrices(fragments);
-    const worldPos = ifcZUpPointToWorld(
-      activeCam.camera_view_point,
-      yupToWorldMatrix,
-    );
+    const worldPos = ifcZUpPointToWorld(normCam.viewPoint, yupToWorldMatrix);
     const worldDir = ifcZUpDirectionToWorld(
-      activeCam.camera_direction,
+      normCam.direction,
       yupToWorldMatrix,
     );
 
@@ -948,11 +1141,11 @@ export async function resolveViewpointPinWorldPosition(
     return worldPos.clone().addScaledVector(worldDir, 8);
   }
 
-  if (viewpoint.camera) {
+  if (normCam?.kind === 'legacy' && normCam.legacyTarget) {
     return new THREE.Vector3(
-      viewpoint.camera.target.x,
-      viewpoint.camera.target.y,
-      viewpoint.camera.target.z,
+      normCam.legacyTarget.x,
+      normCam.legacyTarget.y,
+      normCam.legacyTarget.z,
     );
   }
 

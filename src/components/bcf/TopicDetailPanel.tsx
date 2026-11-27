@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { bcfService } from '../../api/bcf.service';
 import { getApiErrorMessage } from '../../api/client';
@@ -6,8 +6,6 @@ import { useAuth } from '../../auth/AuthProvider';
 import { useProjectRole } from '../../hooks/useProjectRole';
 import type { ProjectMember } from '../../types/api.types';
 import type {
-  BcfDocument,
-  BcfDocumentReference,
   BcfProjectExtensions,
   BcfTopic,
   BcfViewpoint,
@@ -15,6 +13,14 @@ import type {
   CreateViewpointPayload,
   PutTopicPayload,
 } from '../../types/bcf.types';
+import {
+  filterAllowedTopicStatuses,
+  PAVABIM_DISCIPLINE_LABELS,
+  translateTopicPriority,
+  translateTopicStage,
+  translateTopicStatus,
+  translateTopicType,
+} from '../../utils/bcfLabels';
 import { useEngine } from '../../viewer/EngineContext';
 import { AuthenticatedImage } from '../common/AuthenticatedImage';
 import {
@@ -22,6 +28,11 @@ import {
   getPriorityIndicator,
   getStatusBadgeStyle,
 } from './TopicListPanel';
+import {
+  ExpandImageIcon,
+  GoToViewpointIcon,
+  ViewpointImageModal,
+} from './ViewpointImageModal';
 
 interface TopicDetailPanelProps {
   mode: 'create' | 'detail';
@@ -57,11 +68,130 @@ function toInputDateValue(iso?: string): string {
   return d.toISOString().slice(0, 10);
 }
 
-function formatFileSize(bytes?: number): string {
-  if (!bytes || bytes <= 0) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+interface MentionCandidate {
+  email: string;
+  displayName?: string;
+  photoURL?: string;
+  mentionToken: string;
+}
+
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function renderMentionsInSegment(
+  segment: string,
+  mentionRegex: RegExp,
+  tooltipByLowerToken: Map<string, string>,
+  keyPrefix: string,
+): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let lastIdx = 0;
+  mentionRegex.lastIndex = 0;
+  let m: RegExpExecArray | null;
+
+  while ((m = mentionRegex.exec(segment)) !== null) {
+    const lead = m[1] ?? '';
+    const mentionFull = m[2] ?? ''; // starts with '@'
+    const mentionStart = m.index + lead.length;
+
+    if (mentionStart > lastIdx) {
+      out.push(segment.slice(lastIdx, mentionStart));
+    }
+
+    const tokenWithoutAt = mentionFull.slice(1).toLowerCase();
+    const tooltip = tooltipByLowerToken.get(tokenWithoutAt);
+
+    out.push(
+      <span
+        key={`${keyPrefix}-mnt-${mentionStart}`}
+        title={tooltip ? `Usuario mencionado: ${tooltip}` : undefined}
+        className="inline-block rounded bg-sky-500/15 border border-sky-500/40 px-1 py-px font-semibold text-sky-300"
+      >
+        {mentionFull}
+      </span>,
+    );
+
+    lastIdx = mentionStart + mentionFull.length;
+  }
+
+  if (lastIdx < segment.length) {
+    out.push(segment.slice(lastIdx));
+  }
+
+  return out;
+}
+
+function renderRichTextWithLinksAndMentions(
+  text: string,
+  mentionRegex: RegExp,
+  tooltipByLowerToken: Map<string, string>,
+): React.ReactNode {
+  const urlRegex = /(https?:\/\/[^\s<]+|www\.[^\s<]+)/gi;
+  const nodes: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = urlRegex.exec(text)) !== null) {
+    const start = match.index;
+    if (start > lastIndex) {
+      nodes.push(
+        ...renderMentionsInSegment(
+          text.slice(lastIndex, start),
+          mentionRegex,
+          tooltipByLowerToken,
+          `seg-${lastIndex}`,
+        ),
+      );
+    }
+
+    let rawUrl = match[0];
+    let trailing = '';
+    while (/[.,;:!?)\]>]$/.test(rawUrl)) {
+      if (rawUrl.endsWith(')')) {
+        const openCount = (rawUrl.match(/\(/g) ?? []).length;
+        const closeCount = (rawUrl.match(/\)/g) ?? []).length;
+        if (closeCount <= openCount) break;
+      }
+      trailing = rawUrl.slice(-1) + trailing;
+      rawUrl = rawUrl.slice(0, -1);
+    }
+
+    if (rawUrl) {
+      const href = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+      nodes.push(
+        <a
+          key={`lnk-${start}`}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="text-pavasal-400 underline hover:text-pavasal-300 break-all"
+        >
+          {rawUrl}
+        </a>,
+      );
+    }
+
+    if (trailing) {
+      nodes.push(trailing);
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(
+      ...renderMentionsInSegment(
+        text.slice(lastIndex),
+        mentionRegex,
+        tooltipByLowerToken,
+        `seg-${lastIndex}`,
+      ),
+    );
+  }
+
+  return nodes.length > 0 ? nodes : text;
 }
 
 export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
@@ -84,25 +214,49 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
     () =>
       extensions?.topic_type?.length
         ? extensions.topic_type
-        : ['Issue', 'Clash', 'Error', 'Request'],
+        : [
+          'Clash',
+          'Error',
+          'Request',
+          'Issue',
+          'Inquiry',
+          'Warning',
+          'Info',
+          'Remark',
+        ],
     [extensions?.topic_type],
   );
   const topicStatuses = useMemo(
     () =>
-      extensions?.topic_status?.length
-        ? extensions.topic_status
-        : ['Open', 'In Progress', 'Resolved', 'Closed'],
+      filterAllowedTopicStatuses(
+        extensions?.topic_status?.length
+          ? extensions.topic_status
+          : ['Open', 'In Progress', 'Resolved', 'Closed'],
+      ),
     [extensions?.topic_status],
   );
   const priorities = useMemo(
-    () => extensions?.priority ?? [],
+    () =>
+      extensions?.priority?.length
+        ? extensions.priority
+        : ['Low', 'Normal', 'High', 'Critical'],
     [extensions?.priority],
   );
-  const stages = useMemo(() => extensions?.stage ?? [], [extensions?.stage]);
-  const availableLabels = useMemo(
-    () => extensions?.topic_label ?? [],
-    [extensions?.topic_label],
+  const stages = useMemo(
+    () =>
+      extensions?.stage?.length
+        ? extensions.stage
+        : [
+          'Design',
+          'Pre-construction',
+          'Coordination',
+          'Construction',
+          'Handover',
+          'As-Built',
+        ],
+    [extensions?.stage],
   );
+  const availableLabels = PAVABIM_DISCIPLINE_LABELS;
 
   const memberByEmail = useMemo(() => {
     const map = new Map<string, ProjectMember>();
@@ -118,6 +272,76 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
     }
     return members.map((m) => m.email);
   }, [extensions?.user_id_type, members]);
+
+  const mentionDirectory = useMemo<MentionCandidate[]>(() => {
+    const byEmail = new Map<string, MentionCandidate>();
+    for (const m of members) {
+      const email = m.email?.trim();
+      if (!email) continue;
+      const cleanName = m.displayName?.trim() || undefined;
+      byEmail.set(email.toLowerCase(), {
+        email,
+        displayName: cleanName,
+        photoURL: m.photoURL,
+        mentionToken: cleanName || email,
+      });
+    }
+    for (const rawEmail of assignableUsers) {
+      const email = rawEmail?.trim();
+      if (!email || byEmail.has(email.toLowerCase())) continue;
+      byEmail.set(email.toLowerCase(), {
+        email,
+        mentionToken: email,
+      });
+    }
+    return Array.from(byEmail.values()).sort((a, b) =>
+      (a.displayName || a.email).localeCompare(b.displayName || b.email),
+    );
+  }, [assignableUsers, members]);
+
+  const { mentionMatcherRegex, mentionTooltipMap } = useMemo(() => {
+    const tooltipMap = new Map<string, string>();
+    const knownTokens = new Set<string>();
+
+    for (const cand of mentionDirectory) {
+      const label = cand.displayName
+        ? `${cand.displayName} (${cand.email})`
+        : cand.email;
+      knownTokens.add(cand.email);
+      tooltipMap.set(cand.email.toLowerCase(), label);
+
+      const localPart = cand.email.split('@')[0];
+      if (localPart) {
+        knownTokens.add(localPart);
+        if (!tooltipMap.has(localPart.toLowerCase())) {
+          tooltipMap.set(localPart.toLowerCase(), label);
+        }
+      }
+
+      if (cand.displayName) {
+        knownTokens.add(cand.displayName);
+        tooltipMap.set(cand.displayName.toLowerCase(), label);
+      }
+    }
+
+    const sortedKnownPatterns = Array.from(knownTokens)
+      .sort((a, b) => b.length - a.length)
+      .map(escapeRegExp);
+
+    // Match known project @DisplayName / @email / @localPart first, plus generic @handle
+    const genericHandle = '[A-Za-zÀ-ÿ0-9._-]+(?:@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})?';
+    const combinedAlternation =
+      sortedKnownPatterns.length > 0
+        ? `(?:${sortedKnownPatterns.join('|')}|${genericHandle})`
+        : genericHandle;
+
+    const regex = new RegExp(
+      `(^|[\\s([{"'«¡¿,;:])(@${combinedAlternation})(?=$|[\\s)\\]}"'».,;:!?])`,
+      'gi',
+    );
+
+    return { mentionMatcherRegex: regex, mentionTooltipMap: tooltipMap };
+  }, [mentionDirectory]);
 
   const defaultStatus = useMemo(
     () =>
@@ -142,19 +366,81 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
   const [activeAppliedVpGuid, setActiveAppliedVpGuid] = useState<string | null>(
     null,
   );
+  const [previewImage, setPreviewImage] = useState<{
+    src: string;
+    title: string;
+    vp?: BcfViewpoint;
+    vpGuid?: string;
+  } | null>(null);
 
-  // Documents section state
-  const [docTab, setDocTab] = useState<'none' | 'upload' | 'existing' | 'url'>(
-    'none',
-  );
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [selectedExistingDocGuid, setSelectedExistingDocGuid] = useState('');
-  const [externalUrl, setExternalUrl] = useState('');
-  const [docDescription, setDocDescription] = useState('');
-
-  // Comments composer state
+  // Comments composer state & @mention autocomplete
   const [commentText, setCommentText] = useState('');
   const [attachViewToComment, setAttachViewToComment] = useState(false);
+  const commentTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [mentionTrigger, setMentionTrigger] = useState<{
+    atIndex: number;
+    cursorIndex: number;
+    query: string;
+  } | null>(null);
+  const [mentionActiveIdx, setMentionActiveIdx] = useState(0);
+
+  const filteredMentionCandidates = useMemo(() => {
+    if (!mentionTrigger) return [];
+    const q = mentionTrigger.query.trim().toLowerCase();
+    return mentionDirectory
+      .filter((cand) => {
+        if (!q) return true;
+        return (
+          cand.email.toLowerCase().includes(q) ||
+          (cand.displayName?.toLowerCase().includes(q) ?? false)
+        );
+      })
+      .slice(0, 8);
+  }, [mentionDirectory, mentionTrigger]);
+
+  const updateMentionTriggerFromTextarea = (
+    value: string,
+    selectionStart: number | null,
+  ) => {
+    if (selectionStart === null || mentionDirectory.length === 0) {
+      setMentionTrigger(null);
+      return;
+    }
+    const before = value.slice(0, selectionStart);
+    const match = /(?:^|[\s([{"'«¡¿,;:])@([^\n@]{0,40})$/.exec(before);
+    if (!match) {
+      setMentionTrigger(null);
+      return;
+    }
+    const query = match[1] ?? '';
+    const atIndex = selectionStart - query.length - 1;
+    setMentionTrigger({
+      atIndex,
+      cursorIndex: selectionStart,
+      query,
+    });
+    setMentionActiveIdx(0);
+  };
+
+  const applyMentionCandidate = (candidate: MentionCandidate) => {
+    if (!mentionTrigger) return;
+    const prefix = commentText.slice(0, mentionTrigger.atIndex);
+    const suffix = commentText.slice(mentionTrigger.cursorIndex);
+    const inserted = `@${candidate.mentionToken} `;
+    const nextValue = `${prefix}${inserted}${suffix}`;
+    const nextCursorPos = prefix.length + inserted.length;
+
+    setCommentText(nextValue);
+    setMentionTrigger(null);
+
+    window.requestAnimationFrame(() => {
+      const el = commentTextareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(nextCursorPos, nextCursorPos);
+      }
+    });
+  };
 
   // Keep defaults aligned with dynamically loaded extensions in Create mode
   useEffect(() => {
@@ -172,26 +458,6 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
     queryFn: () => bcfService.getTopicById(projectId, topicGuid!, true),
     enabled: mode === 'detail' && Boolean(projectId && topicGuid),
   });
-
-  const docRefsQuery = useQuery({
-    queryKey: ['bcf-doc-refs', projectId, topicGuid],
-    queryFn: () => bcfService.getDocumentReferences(projectId, topicGuid!),
-    enabled: mode === 'detail' && Boolean(projectId && topicGuid),
-  });
-
-  const projectDocsQuery = useQuery({
-    queryKey: ['bcf-project-docs', projectId],
-    queryFn: () => bcfService.getDocuments(projectId),
-    enabled: mode === 'detail' && Boolean(projectId),
-  });
-
-  const projectDocByGuid = useMemo(() => {
-    const map = new Map<string, BcfDocument>();
-    for (const d of projectDocsQuery.data ?? []) {
-      map.set(d.guid, d);
-    }
-    return map;
-  }, [projectDocsQuery.data]);
 
   const topic = topicQuery.data;
 
@@ -226,9 +492,6 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
     queryClient.invalidateQueries({ queryKey: ['bcf-stats', projectId] });
     if (g) {
       queryClient.invalidateQueries({ queryKey: ['bcf-topic', projectId, g] });
-      queryClient.invalidateQueries({
-        queryKey: ['bcf-doc-refs', projectId, g],
-      });
     }
   };
 
@@ -370,73 +633,6 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
     onError: (err) => setErrorMsg(getApiErrorMessage(err)),
   });
 
-  const addDocumentRefMutation = useMutation({
-    mutationFn: async () => {
-      if (!topicGuid) throw new Error('Tópico no válido');
-
-      if (docTab === 'upload') {
-        if (!uploadFile) {
-          throw new Error('Selecciona un archivo para subir.');
-        }
-        const uploaded = await bcfService.uploadDocument(
-          projectId,
-          uploadFile,
-          docDescription.trim() || undefined,
-        );
-        return bcfService.createDocumentReference(projectId, topicGuid, {
-          document_guid: uploaded.guid,
-          description: docDescription.trim() || uploaded.filename,
-        });
-      }
-
-      if (docTab === 'existing') {
-        if (!selectedExistingDocGuid) {
-          throw new Error('Selecciona un documento existente del proyecto.');
-        }
-        return bcfService.createDocumentReference(projectId, topicGuid, {
-          document_guid: selectedExistingDocGuid,
-          description: docDescription.trim() || undefined,
-        });
-      }
-
-      if (docTab === 'url') {
-        const cleanUrl = externalUrl.trim();
-        if (!/^https?:\/\/.+/i.test(cleanUrl)) {
-          throw new Error('Introduce una URL válida (https://...).');
-        }
-        return bcfService.createDocumentReference(projectId, topicGuid, {
-          url: cleanUrl,
-          description: docDescription.trim() || undefined,
-        });
-      }
-
-      throw new Error('Modo de adjunto no seleccionado.');
-    },
-    onSuccess: () => {
-      setErrorMsg(null);
-      setDocTab('none');
-      setUploadFile(null);
-      setSelectedExistingDocGuid('');
-      setExternalUrl('');
-      setDocDescription('');
-      queryClient.invalidateQueries({
-        queryKey: ['bcf-project-docs', projectId],
-      });
-      invalidateTopicData();
-    },
-    onError: (err) => setErrorMsg(getApiErrorMessage(err)),
-  });
-
-  const deleteDocumentRefMutation = useMutation({
-    mutationFn: (docRefGuid: string) =>
-      bcfService.deleteDocumentReference(projectId, topicGuid!, docRefGuid),
-    onSuccess: () => {
-      setErrorMsg(null);
-      invalidateTopicData();
-    },
-    onError: (err) => setErrorMsg(getApiErrorMessage(err)),
-  });
-
   const addCommentMutation = useMutation({
     mutationFn: async () => {
       if (!topicGuid) throw new Error('Tópico no válido');
@@ -471,6 +667,7 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
     onSuccess: () => {
       setErrorMsg(null);
       setCommentText('');
+      setMentionTrigger(null);
       setAttachViewToComment(false);
       invalidateTopicData();
     },
@@ -491,10 +688,14 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
   });
 
   const handleApplyViewpoint = async (vp: BcfViewpoint) => {
-    if (!isEngineReady) return;
+    if (!isEngineReady || !topicGuid) return;
+    setErrorMsg(null);
     setActiveAppliedVpGuid(vp.guid);
     try {
-      await applyBcfViewpoint(vp);
+      const fullVp = await bcfService
+        .getViewpoint(projectId, topicGuid, vp.guid)
+        .catch(() => vp);
+      await applyBcfViewpoint(fullVp);
     } catch (err) {
       setErrorMsg(getApiErrorMessage(err));
     }
@@ -545,7 +746,7 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
           >
             {topicTypes.map((t) => (
               <option key={t} value={t}>
-                {t}
+                {translateTopicType(t)}
               </option>
             ))}
           </select>
@@ -563,7 +764,7 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
           >
             {topicStatuses.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {translateTopicStatus(s)}
               </option>
             ))}
           </select>
@@ -583,7 +784,7 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
             <option value="">Sin especificar</option>
             {priorities.map((p) => (
               <option key={p} value={p}>
-                {p}
+                {translateTopicPriority(p)}
               </option>
             ))}
           </select>
@@ -591,7 +792,7 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
 
         <div>
           <label className="block text-[11px] font-medium text-asphalt-200 mb-1">
-            Fase / Etapa
+            Fase
           </label>
           <select
             value={stage}
@@ -601,7 +802,7 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
             <option value="">Sin especificar</option>
             {stages.map((st) => (
               <option key={st} value={st}>
-                {st}
+                {translateTopicStage(st)}
               </option>
             ))}
           </select>
@@ -648,7 +849,7 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
       {availableLabels.length > 0 && (
         <div>
           <label className="block text-[11px] font-medium text-asphalt-200 mb-1">
-            Etiquetas / Disciplinas
+            Disciplinas
           </label>
           <div className="flex flex-wrap gap-1">
             {availableLabels.map((lbl) => {
@@ -658,11 +859,10 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
                   key={lbl}
                   type="button"
                   onClick={() => toggleLabel(lbl)}
-                  className={`rounded-full px-2 py-0.5 text-[10px] font-medium border transition-colors ${
-                    selected
-                      ? 'border-pavasal-500 bg-pavasal-500 text-asphalt-950 font-bold'
-                      : 'border-asphalt-700 bg-asphalt-900 text-asphalt-300 hover:border-pavasal-500/50'
-                  }`}
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-medium border transition-colors ${selected
+                    ? 'border-pavasal-500 bg-pavasal-500 text-asphalt-950 font-bold'
+                    : 'border-asphalt-700 bg-asphalt-900 text-asphalt-300 hover:border-pavasal-500/50'
+                    }`}
                 >
                   {lbl}
                 </button>
@@ -695,7 +895,7 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
       <div className="space-y-3 text-xs">
         <div className="flex items-center justify-between border-b border-asphalt-700 pb-2">
           <h3 className="font-bold text-pavasal-400 uppercase tracking-wider text-[11px]">
-            Nuevo Tópico BCF 3.0
+            Nuevo Tópico
           </h3>
           <button
             type="button"
@@ -748,7 +948,7 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
           >
             {createTopicMutation.isPending
               ? 'Creando tópico...'
-              : 'Crear Tópico BCF 3.0'}
+              : 'Crear Tópico'}
           </button>
         </form>
       </div>
@@ -780,8 +980,6 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
   const viewpoints = topic.viewpoints ?? [];
   const viewpointByGuid = new Map(viewpoints.map((vp) => [vp.guid, vp]));
   const comments = topic.comments ?? [];
-  const docRefs: BcfDocumentReference[] =
-    docRefsQuery.data ?? topic.document_references ?? [];
 
   const assigneeMember = topic.assigned_to
     ? memberByEmail.get(topic.assigned_to.toLowerCase())
@@ -854,7 +1052,7 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
         >
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-bold uppercase tracking-wider text-pavasal-400">
-              Editar metadatos ({topic.server_assigned_id || 'BCF'})
+              Editar metadatos ({topic.server_assigned_id || 'Tópico'})
             </span>
             <button
               type="button"
@@ -895,7 +1093,7 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
                   {topic.server_assigned_id || topic.guid.slice(0, 8)}
                 </span>
                 <span className="rounded bg-asphalt-950 px-1.5 py-0.5 text-[10px] text-asphalt-200">
-                  {topic.topic_type}
+                  {translateTopicType(topic.topic_type)}
                 </span>
                 {topic.priority && (
                   <span
@@ -904,12 +1102,12 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
                     <span
                       className={`w-1.5 h-1.5 rounded-full ${prioInfo.dotClass}`}
                     />
-                    {topic.priority}
+                    {translateTopicPriority(topic.priority)}
                   </span>
                 )}
                 {topic.stage && (
                   <span className="rounded bg-asphalt-800 px-1.5 py-0.5 text-[10px] text-asphalt-300">
-                    {topic.stage}
+                    {translateTopicStage(topic.stage)}
                   </span>
                 )}
               </div>
@@ -934,7 +1132,11 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
 
           {topic.description && (
             <p className="text-asphalt-200 whitespace-pre-wrap leading-relaxed">
-              {topic.description}
+              {renderRichTextWithLinksAndMentions(
+                topic.description,
+                mentionMatcherRegex,
+                mentionTooltipMap,
+              )}
             </p>
           )}
 
@@ -978,7 +1180,11 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
             </span>
             {canEditBcf ? (
               <select
-                value={topic.topic_status}
+                value={
+                  topicStatuses.includes(topic.topic_status)
+                    ? topic.topic_status
+                    : defaultStatus
+                }
                 disabled={quickStatusMutation.isPending}
                 onChange={(e) => quickStatusMutation.mutate(e.target.value)}
                 aria-label="Cambiar estado del tópico"
@@ -986,7 +1192,7 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
               >
                 {topicStatuses.map((s) => (
                   <option key={s} value={s}>
-                    {s}
+                    {translateTopicStatus(s)}
                   </option>
                 ))}
               </select>
@@ -994,7 +1200,7 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
               <span
                 className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${getStatusBadgeStyle(topic.topic_status)}`}
               >
-                {topic.topic_status}
+                {translateTopicStatus(topic.topic_status)}
               </span>
             )}
           </div>
@@ -1045,32 +1251,42 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
               return (
                 <div
                   key={vp.guid}
-                  className={`group relative rounded border overflow-hidden transition-colors ${
-                    isApplied
-                      ? 'border-pavasal-500 ring-1 ring-pavasal-500/50 bg-asphalt-900'
-                      : 'border-asphalt-700 bg-asphalt-950 hover:border-pavasal-500/70'
-                  }`}
+                  className={`group relative rounded border overflow-hidden transition-colors ${isApplied
+                    ? 'border-pavasal-500 ring-1 ring-pavasal-500/50 bg-asphalt-900'
+                    : 'border-asphalt-700 bg-asphalt-950 hover:border-pavasal-500/70'
+                    }`}
                 >
                   <button
                     type="button"
-                    disabled={!isEngineReady}
-                    onClick={() => void handleApplyViewpoint(vp)}
-                    className="w-full text-left disabled:opacity-50"
-                    title="Restaurar cámara, visibilidad, selección, colores y secciones en el visor 3D"
+                    disabled={!imgSrc}
+                    onClick={() => {
+                      if (!imgSrc) return;
+                      setPreviewImage({
+                        src: imgSrc,
+                        title: `${topic.server_assigned_id || 'Tópico'} · Vista #${idx + 1}`,
+                        vp,
+                      });
+                    }}
+                    className="relative block w-full text-left group/vpimg focus:outline-none disabled:cursor-default"
+                    title={imgSrc ? 'Ver imagen ampliada' : 'Sin captura disponible'}
                   >
                     <AuthenticatedImage
                       src={imgSrc}
                       alt={`Punto de vista ${idx + 1}`}
                       className="w-full h-24 object-cover"
                     />
-                    <div className="p-1.5 bg-asphalt-900 space-y-0.5">
-                      <div className="flex items-center justify-between text-[10px]">
-                        <span className="font-semibold text-asphalt-100">
-                          Vista #{idx + 1}
-                        </span>
-                        <span className="text-pavasal-400 font-semibold">
-                          Aplicar 3D
-                        </span>
+                    {imgSrc && (
+                      <span className="pointer-events-none absolute inset-0 bg-black/45 opacity-0 group-hover/vpimg:opacity-100 transition-opacity flex items-center justify-center gap-1 text-[10px] font-semibold text-white">
+                        <ExpandImageIcon className="w-3.5 h-3.5 text-pavasal-400" />
+                        <span>Ver imagen</span>
+                      </span>
+                    )}
+                  </button>
+
+                  <div className="p-1.5 bg-asphalt-900 flex items-center justify-between gap-1.5 border-t border-asphalt-800">
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-semibold text-asphalt-100 truncate">
+                        Vista #{idx + 1}
                       </div>
                       {(selCount > 0 || clipCount > 0 || colorCount > 0) && (
                         <div className="flex flex-wrap gap-1 text-[9px] text-asphalt-400">
@@ -1080,7 +1296,22 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
                         </div>
                       )}
                     </div>
-                  </button>
+
+                    <button
+                      type="button"
+                      disabled={!isEngineReady}
+                      onClick={() => void handleApplyViewpoint(vp)}
+                      title="Ir al punto de vista en el visor 3D"
+                      aria-label={`Ir al punto de vista Vista #${idx + 1} en 3D`}
+                      className={`shrink-0 rounded border p-1 transition-colors disabled:opacity-40 ${
+                        isApplied
+                          ? 'border-pavasal-500 bg-pavasal-500 text-asphalt-950'
+                          : 'border-pavasal-500/40 bg-pavasal-500/15 text-pavasal-400 hover:bg-pavasal-500 hover:text-asphalt-950'
+                      }`}
+                    >
+                      <GoToViewpointIcon className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
 
                   {canDeleteVp && (
                     <button
@@ -1101,257 +1332,10 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
         )}
       </section>
 
-      {/* 3. Attached Documents Section (DocumentsSection) */}
-      <section className="space-y-2 pt-2 border-t border-asphalt-800">
-        <div className="flex items-center justify-between gap-2">
-          <h5 className="text-[11px] font-semibold uppercase tracking-wider text-pavasal-400">
-            Documentos ({docRefs.length})
-          </h5>
-          {canEditBcf && (
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() =>
-                  setDocTab((prev) => (prev === 'upload' ? 'none' : 'upload'))
-                }
-                className={`rounded px-1.5 py-0.5 text-[10px] border transition-colors ${
-                  docTab === 'upload'
-                    ? 'border-pavasal-500 bg-pavasal-500 text-asphalt-950 font-bold'
-                    : 'border-asphalt-700 bg-asphalt-900 text-asphalt-200 hover:border-pavasal-500/50'
-                }`}
-              >
-                + Subir
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setDocTab((prev) =>
-                    prev === 'existing' ? 'none' : 'existing',
-                  )
-                }
-                className={`rounded px-1.5 py-0.5 text-[10px] border transition-colors ${
-                  docTab === 'existing'
-                    ? 'border-pavasal-500 bg-pavasal-500 text-asphalt-950 font-bold'
-                    : 'border-asphalt-700 bg-asphalt-900 text-asphalt-200 hover:border-pavasal-500/50'
-                }`}
-              >
-                Vincular
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setDocTab((prev) => (prev === 'url' ? 'none' : 'url'))
-                }
-                className={`rounded px-1.5 py-0.5 text-[10px] border transition-colors ${
-                  docTab === 'url'
-                    ? 'border-pavasal-500 bg-pavasal-500 text-asphalt-950 font-bold'
-                    : 'border-asphalt-700 bg-asphalt-900 text-asphalt-200 hover:border-pavasal-500/50'
-                }`}
-              >
-                + URL
-              </button>
-            </div>
-          )}
-        </div>
-
-        {docTab !== 'none' && canEditBcf && (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              addDocumentRefMutation.mutate();
-            }}
-            className="rounded border border-asphalt-700 bg-asphalt-950/70 p-2.5 space-y-2"
-          >
-            {docTab === 'upload' && (
-              <div>
-                <label className="block text-[10px] text-asphalt-300 mb-1">
-                  Archivo nuevo (PDF, plano, imagen...)
-                </label>
-                <input
-                  type="file"
-                  required
-                  onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
-                  className="w-full text-[11px] text-asphalt-200 file:mr-2 file:rounded file:border-0 file:bg-asphalt-800 file:px-2 file:py-1 file:text-[10px] file:font-semibold file:text-pavasal-400"
-                />
-              </div>
-            )}
-
-            {docTab === 'existing' && (
-              <div>
-                <label className="block text-[10px] text-asphalt-300 mb-1">
-                  Documento ya subido al proyecto
-                </label>
-                <select
-                  required
-                  value={selectedExistingDocGuid}
-                  onChange={(e) => setSelectedExistingDocGuid(e.target.value)}
-                  className="w-full rounded border border-asphalt-700 bg-asphalt-900 px-2 py-1 text-[11px] text-asphalt-100 focus:border-pavasal-500 focus:outline-none"
-                >
-                  <option value="">Seleccionar documento...</option>
-                  {(projectDocsQuery.data ?? []).map((doc) => (
-                    <option key={doc.guid} value={doc.guid}>
-                      {doc.filename}
-                      {doc.size ? ` (${formatFileSize(doc.size)})` : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {docTab === 'url' && (
-              <div>
-                <label className="block text-[10px] text-asphalt-300 mb-1">
-                  Enlace externo (URL)
-                </label>
-                <input
-                  type="url"
-                  required
-                  value={externalUrl}
-                  onChange={(e) => setExternalUrl(e.target.value)}
-                  placeholder="https://..."
-                  className="w-full rounded border border-asphalt-700 bg-asphalt-900 px-2 py-1 text-[11px] text-asphalt-100 placeholder-asphalt-500 focus:border-pavasal-500 focus:outline-none"
-                />
-              </div>
-            )}
-
-            <input
-              type="text"
-              value={docDescription}
-              onChange={(e) => setDocDescription(e.target.value)}
-              placeholder="Descripción opcional..."
-              className="w-full rounded border border-asphalt-700 bg-asphalt-900 px-2 py-1 text-[11px] text-asphalt-100 placeholder-asphalt-500 focus:border-pavasal-500 focus:outline-none"
-            />
-
-            <div className="flex justify-end gap-1.5">
-              <button
-                type="button"
-                onClick={() => setDocTab('none')}
-                className="px-2 py-1 rounded border border-asphalt-700 text-[10px] text-asphalt-300"
-              >
-                Cancelar
-              </button>
-              <button
-                type="submit"
-                disabled={addDocumentRefMutation.isPending}
-                className="px-2.5 py-1 rounded bg-pavasal-500 text-[10px] font-bold text-asphalt-950 hover:bg-pavasal-400 disabled:opacity-50"
-              >
-                {addDocumentRefMutation.isPending
-                  ? 'Vinculando...'
-                  : 'Adjuntar al tópico'}
-              </button>
-            </div>
-          </form>
-        )}
-
-        {docRefs.length === 0 ? (
-          <p className="text-[11px] text-asphalt-400">
-            Sin documentos ni enlaces adjuntos.
-          </p>
-        ) : (
-          <div className="space-y-1.5">
-            {docRefs.map((ref) => {
-              const linkedDoc = ref.document_guid
-                ? projectDocByGuid.get(ref.document_guid)
-                : undefined;
-              const displayTitle =
-                ref.description ||
-                linkedDoc?.filename ||
-                ref.filename ||
-                ref.url ||
-                'Documento adjunto';
-
-              return (
-                <div
-                  key={ref.guid}
-                  className="rounded border border-asphalt-700 bg-asphalt-900/70 px-2.5 py-1.5 flex items-center justify-between gap-2"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div
-                      className="text-[11px] font-medium text-asphalt-100 truncate"
-                      title={displayTitle}
-                    >
-                      {ref.url ? '🔗 ' : '📄 '}
-                      {displayTitle}
-                    </div>
-                    {linkedDoc && (
-                      <div className="text-[10px] text-asphalt-400 truncate">
-                        {linkedDoc.filename}
-                        {linkedDoc.size
-                          ? ` · ${formatFileSize(linkedDoc.size)}`
-                          : ''}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {ref.url ? (
-                      <a
-                        href={ref.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="rounded bg-asphalt-800 px-2 py-0.5 text-[10px] font-semibold text-pavasal-400 hover:text-pavasal-300"
-                      >
-                        Abrir
-                      </a>
-                    ) : ref.document_guid ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void bcfService.downloadDocument(
-                              projectId,
-                              ref.document_guid!,
-                              linkedDoc?.filename || displayTitle,
-                              true,
-                            )
-                          }
-                          className="rounded bg-asphalt-800 px-1.5 py-0.5 text-[10px] font-medium text-asphalt-200 hover:text-pavasal-300"
-                          title="Vista previa en pestaña nueva"
-                        >
-                          Ver
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void bcfService.downloadDocument(
-                              projectId,
-                              ref.document_guid!,
-                              linkedDoc?.filename || displayTitle,
-                              false,
-                            )
-                          }
-                          className="rounded bg-asphalt-800 px-1.5 py-0.5 text-[10px] font-semibold text-pavasal-400 hover:text-pavasal-300"
-                          title="Descargar documento"
-                        >
-                          Descargar
-                        </button>
-                      </>
-                    ) : null}
-
-                    {canEditBcf && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          deleteDocumentRefMutation.mutate(ref.guid)
-                        }
-                        className="text-[10px] text-red-400 hover:text-red-300 px-1"
-                        title="Desvincular documento"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* 4. Activity & Comments Thread (CommentsThread) */}
+      {/* 3. Comments Thread (CommentsThread) */}
       <section className="space-y-2 pt-2 border-t border-asphalt-800">
         <h5 className="text-[11px] font-semibold uppercase tracking-wider text-pavasal-400">
-          Comentarios y actividad ({comments.length})
+          Comentarios ({comments.length})
         </h5>
 
         {comments.length === 0 ? (
@@ -1371,10 +1355,10 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
               const commentThumbSrc = c.viewpoint_guid
                 ? associatedVp
                   ? bcfService.resolveViewpointSnapshotPath(
-                      projectId,
-                      topic.guid,
-                      associatedVp,
-                    )
+                    projectId,
+                    topic.guid,
+                    associatedVp,
+                  )
                   : `/bcf/3.0/projects/${encodeURIComponent(projectId)}/topics/${encodeURIComponent(topic.guid)}/viewpoints/${encodeURIComponent(c.viewpoint_guid)}/snapshot`
                 : null;
               const canDeleteCom = canDeleteAuthorResource(
@@ -1411,8 +1395,17 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
                       {canDeleteCom && (
                         <button
                           type="button"
-                          onClick={() => deleteCommentMutation.mutate(c.guid)}
-                          className="text-red-400 hover:text-red-300"
+                          disabled={deleteCommentMutation.isPending}
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                '¿Estás seguro de que quieres eliminar este comentario?',
+                              )
+                            ) {
+                              deleteCommentMutation.mutate(c.guid);
+                            }
+                          }}
+                          className="text-red-400 hover:text-red-300 disabled:opacity-40"
                           title="Eliminar comentario"
                         >
                           ✕
@@ -1422,41 +1415,69 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
                   </div>
 
                   {c.comment && (
-                    <p className="text-asphalt-100 whitespace-pre-wrap leading-relaxed">
-                      {c.comment}
+                    <p className="text-asphalt-100 whitespace-pre-wrap leading-relaxed break-words select-text">
+                      {renderRichTextWithLinksAndMentions(
+                        c.comment,
+                        mentionMatcherRegex,
+                        mentionTooltipMap,
+                      )}
                     </p>
                   )}
 
                   {c.viewpoint_guid && commentThumbSrc && (
-                    <button
-                      type="button"
-                      disabled={!isEngineReady}
-                      onClick={async () => {
-                        const vp =
-                          associatedVp ??
-                          (await bcfService
-                            .getViewpoint(
-                              projectId,
-                              topic.guid,
-                              c.viewpoint_guid!,
-                            )
-                            .catch(() => null));
-                        if (vp) {
-                          await handleApplyViewpoint(vp);
+                    <div className="w-full max-w-[230px] rounded border border-asphalt-700 bg-asphalt-950 overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPreviewImage({
+                            src: commentThumbSrc,
+                            title: `${topic.server_assigned_id || 'Tópico'} · Captura del comentario`,
+                            vp: associatedVp,
+                            vpGuid: c.viewpoint_guid ?? undefined,
+                          })
                         }
-                      }}
-                      className="block w-full max-w-[220px] rounded border border-asphalt-700 overflow-hidden hover:border-pavasal-500 transition-colors text-left"
-                      title="Restaurar en 3D el punto de vista adjunto a este comentario"
-                    >
-                      <AuthenticatedImage
-                        src={commentThumbSrc}
-                        alt="Vista adjunta al comentario"
-                        className="w-full h-24 object-cover"
-                      />
-                      <span className="block bg-asphalt-950 px-2 py-0.5 text-[10px] font-semibold text-pavasal-400">
-                        📷 Restaurar vista del comentario
-                      </span>
-                    </button>
+                        className="relative block w-full text-left group/cthumb focus:outline-none"
+                        title="Ver imagen ampliada"
+                      >
+                        <AuthenticatedImage
+                          src={commentThumbSrc}
+                          alt="Vista adjunta al comentario"
+                          className="w-full h-24 object-cover"
+                        />
+                        <span className="pointer-events-none absolute inset-0 bg-black/45 opacity-0 group-hover/cthumb:opacity-100 transition-opacity flex items-center justify-center gap-1 text-[10px] font-semibold text-white">
+                          <ExpandImageIcon className="w-3.5 h-3.5 text-pavasal-400" />
+                          <span>Ver imagen</span>
+                        </span>
+                      </button>
+                      <div className="px-2 py-1 flex items-center justify-between gap-2 border-t border-asphalt-800 bg-asphalt-900">
+                        <span className="text-[10px] text-asphalt-300 truncate">
+                          Vista adjunta
+                        </span>
+                        <button
+                          type="button"
+                          disabled={!isEngineReady}
+                          onClick={async () => {
+                            const vp =
+                              associatedVp ??
+                              (await bcfService
+                                .getViewpoint(
+                                  projectId,
+                                  topic.guid,
+                                  c.viewpoint_guid!,
+                                )
+                                .catch(() => null));
+                            if (vp) {
+                              await handleApplyViewpoint(vp);
+                            }
+                          }}
+                          title="Ir al punto de vista en el visor 3D"
+                          aria-label="Ir al punto de vista adjunto al comentario en 3D"
+                          className="shrink-0 rounded border border-pavasal-500/40 bg-pavasal-500/15 p-1 text-pavasal-400 hover:bg-pavasal-500 hover:text-asphalt-950 disabled:opacity-40 transition-colors"
+                        >
+                          <GoToViewpointIcon className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </div>
               );
@@ -1471,13 +1492,112 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
               if (!commentText.trim() && !attachViewToComment) return;
               addCommentMutation.mutate();
             }}
-            className="space-y-1.5 pt-1"
+            className="space-y-1.5 pt-1 relative"
           >
+            {/* @mention Autocomplete Menu */}
+            {mentionTrigger && filteredMentionCandidates.length > 0 && (
+              <div className="absolute bottom-full left-0 right-0 mb-1 z-30 rounded-md border border-asphalt-700 bg-asphalt-950 shadow-2xl overflow-hidden">
+                <div className="px-2.5 py-1 border-b border-asphalt-800 text-[10px] font-semibold uppercase tracking-wider text-pavasal-400">
+                  Mencionar usuario del proyecto
+                </div>
+                <div className="max-h-44 overflow-y-auto py-0.5">
+                  {filteredMentionCandidates.map((cand, idx) => {
+                    const isHighlighted = idx === mentionActiveIdx;
+                    return (
+                      <button
+                        key={cand.email}
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          applyMentionCandidate(cand);
+                        }}
+                        onMouseEnter={() => setMentionActiveIdx(idx)}
+                        className={`w-full px-2.5 py-1.5 text-left flex items-center gap-2 transition-colors ${isHighlighted
+                          ? 'bg-pavasal-500/20 text-pavasal-300'
+                          : 'text-asphalt-100 hover:bg-asphalt-800'
+                          }`}
+                      >
+                        {cand.photoURL ? (
+                          <img
+                            src={cand.photoURL}
+                            alt={cand.displayName || cand.email}
+                            referrerPolicy="no-referrer"
+                            className="w-5 h-5 rounded-full object-cover shrink-0"
+                          />
+                        ) : (
+                          <span className="w-5 h-5 rounded-full bg-sky-500/20 border border-sky-500/40 text-[9px] font-bold text-sky-300 flex items-center justify-center shrink-0">
+                            {getInitials(cand.displayName || cand.email)}
+                          </span>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[11px] font-medium truncate">
+                            {cand.displayName || cand.email}
+                          </div>
+                          {cand.displayName && (
+                            <div className="text-[10px] text-asphalt-400 truncate">
+                              {cand.email}
+                            </div>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <textarea
+              ref={commentTextareaRef}
               rows={2}
               value={commentText}
-              onChange={(e) => setCommentText(e.target.value)}
-              placeholder="Escribe un comentario..."
+              onChange={(e) => {
+                const val = e.target.value;
+                setCommentText(val);
+                updateMentionTriggerFromTextarea(val, e.target.selectionStart);
+              }}
+              onClick={(e) =>
+                updateMentionTriggerFromTextarea(
+                  e.currentTarget.value,
+                  e.currentTarget.selectionStart,
+                )
+              }
+              onKeyDown={(e) => {
+                if (mentionTrigger && filteredMentionCandidates.length > 0) {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setMentionActiveIdx(
+                      (prev) => (prev + 1) % filteredMentionCandidates.length,
+                    );
+                    return;
+                  }
+                  if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setMentionActiveIdx(
+                      (prev) =>
+                        (prev - 1 + filteredMentionCandidates.length) %
+                        filteredMentionCandidates.length,
+                    );
+                    return;
+                  }
+                  if (e.key === 'Enter' || e.key === 'Tab') {
+                    e.preventDefault();
+                    applyMentionCandidate(
+                      filteredMentionCandidates[mentionActiveIdx] ??
+                      filteredMentionCandidates[0],
+                    );
+                    return;
+                  }
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setMentionTrigger(null);
+                    return;
+                  }
+                }
+              }}
+              onBlur={() => {
+                window.setTimeout(() => setMentionTrigger(null), 150);
+              }}
+              placeholder="Escribe un comentario, menciona con @ o pega un enlace..."
               className="w-full rounded border border-asphalt-700 bg-asphalt-900 px-2.5 py-1.5 text-asphalt-50 placeholder-asphalt-500 focus:border-pavasal-500 focus:outline-none"
             />
 
@@ -1507,6 +1627,30 @@ export const TopicDetailPanel: React.FC<TopicDetailPanelProps> = ({
           </form>
         )}
       </section>
+
+      <ViewpointImageModal
+        isOpen={Boolean(previewImage)}
+        src={previewImage?.src ?? null}
+        title={previewImage?.title ?? 'Captura del punto de vista'}
+        canNavigate3D={isEngineReady}
+        onNavigate3D={
+          previewImage && (previewImage.vp || previewImage.vpGuid)
+            ? () => {
+                const targetVp = previewImage.vp;
+                const targetGuid = previewImage.vpGuid;
+                if (targetVp) {
+                  void handleApplyViewpoint(targetVp);
+                } else if (targetGuid) {
+                  void bcfService
+                    .getViewpoint(projectId, topic.guid, targetGuid)
+                    .then((vp) => handleApplyViewpoint(vp))
+                    .catch(() => {});
+                }
+              }
+            : undefined
+        }
+        onClose={() => setPreviewImage(null)}
+      />
     </div>
   );
 };

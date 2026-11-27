@@ -1,5 +1,5 @@
-import React, { useCallback, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { bcfService } from '../../api/bcf.service';
 import { getApiErrorMessage } from '../../api/client';
 import { projectsService } from '../../api/projects.service';
@@ -8,13 +8,21 @@ import { useProjectRole } from '../../hooks/useProjectRole';
 import { useViewerStore } from '../../store/useViewerStore';
 import type { CreateViewpointPayload } from '../../types/bcf.types';
 import {
+  hasAllPavabimDisciplines,
+  PAVABIM_DISCIPLINE_LABELS,
+} from '../../utils/bcfLabels';
+import {
   BcfSelectionLimitError,
   type CapturedViewpointDraft,
 } from '../../viewer/BcfViewerBridge';
 import { useEngine } from '../../viewer/EngineContext';
 import { SnapshotRedlineModal } from './SnapshotRedlineModal';
 import { TopicDetailPanel } from './TopicDetailPanel';
-import { TopicListPanel, type TopicListFilters } from './TopicListPanel';
+import {
+  TopicListPanel,
+  UNASSIGNED_FILTER_VALUE,
+  type TopicListFilters,
+} from './TopicListPanel';
 
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -32,12 +40,15 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 }
 
 export const BcfIssuesPanel: React.FC = () => {
+  const queryClient = useQueryClient();
   const { user } = useAuth();
-  const { canEditBcf } = useProjectRole();
+  const { canEditBcf, isAdmin } = useProjectRole();
   const {
     currentProject,
     activeBcfTopicId,
     setActiveBcfTopicId,
+    isCreatingBcfTopic: isCreating,
+    setIsCreatingBcfTopic: setIsCreating,
     setViewerToastError,
     localViewpoints,
     addLocalViewpoint,
@@ -56,7 +67,6 @@ export const BcfIssuesPanel: React.FC = () => {
   const projectId = currentProject?.id || '';
   const isRemoteReady = Boolean(user && projectId);
 
-  const [isCreating, setIsCreating] = useState(false);
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [localViewTitle, setLocalViewTitle] = useState('');
   const [capturingLocal, setCapturingLocal] = useState(false);
@@ -65,10 +75,21 @@ export const BcfIssuesPanel: React.FC = () => {
     search: '',
     statuses: [],
     topicType: '',
-    assignedTo: '',
+    assignedTos: [],
     label: '',
     orderBy: 'modified_date desc',
   });
+
+  useEffect(() => {
+    setFilters({
+      search: '',
+      statuses: [],
+      topicType: '',
+      assignedTos: [],
+      label: '',
+      orderBy: 'modified_date desc',
+    });
+  }, [projectId]);
 
   // Redline capture modal state & promise resolver
   const [redlineDraft, setRedlineDraft] = useState<{
@@ -85,12 +106,52 @@ export const BcfIssuesPanel: React.FC = () => {
     enabled: isRemoteReady,
   });
 
+  const syncedDisciplineProjectsRef = useRef<Set<string>>(new Set());
+
+  // Automatically align project extensions' topic_label & remove ReOpened when an admin opens the project
+  useEffect(() => {
+    const ext = extensionsQuery.data;
+    if (!isRemoteReady || !isAdmin || !ext || !projectId) return;
+    if (syncedDisciplineProjectsRef.current.has(projectId)) return;
+
+    const needsLabelsSync = !hasAllPavabimDisciplines(ext.topic_label);
+    const cleanedStatuses = (ext.topic_status ?? []).filter(
+      (s) => !/^re[\s_-]?open/i.test(s.trim()),
+    );
+    const needsStatusSync =
+      cleanedStatuses.length > 0 &&
+      cleanedStatuses.length !== (ext.topic_status ?? []).length;
+
+    syncedDisciplineProjectsRef.current.add(projectId);
+    if (!needsLabelsSync && !needsStatusSync) return;
+
+    void bcfService
+      .updateExtensions(projectId, {
+        ...(needsLabelsSync
+          ? { topic_label: [...PAVABIM_DISCIPLINE_LABELS] }
+          : {}),
+        ...(needsStatusSync ? { topic_status: cleanedStatuses } : {}),
+      })
+      .then((updated) => {
+        queryClient.setQueryData(['bcf-extensions', projectId], updated);
+      })
+      .catch((err) => {
+        console.warn('[BcfIssuesPanel] Could not sync project extensions:', err);
+      });
+  }, [extensionsQuery.data, isAdmin, isRemoteReady, projectId, queryClient]);
+
   const membersQuery = useQuery({
     queryKey: ['project-members', projectId],
     queryFn: () => projectsService.listMembers(projectId),
     enabled: isRemoteReady,
     staleTime: 1000 * 60 * 2,
   });
+
+  const singleServerAssignee =
+    filters.assignedTos.length === 1 &&
+    filters.assignedTos[0] !== UNASSIGNED_FILTER_VALUE
+      ? filters.assignedTos[0]
+      : '';
 
   const topicsQuery = useQuery({
     queryKey: [
@@ -99,13 +160,20 @@ export const BcfIssuesPanel: React.FC = () => {
       filters.search,
       filters.statuses.join(','),
       filters.topicType,
-      filters.assignedTo,
+      singleServerAssignee,
+      filters.assignedTos.length > 1 ||
+      filters.assignedTos.includes(UNASSIGNED_FILTER_VALUE)
+        ? 'multi'
+        : 'single',
       filters.label,
       filters.orderBy,
     ],
     queryFn: () => {
       const trimmedSearch = filters.search.trim();
       const looksLikeCode = /^TOP-\d+$/i.test(trimmedSearch);
+      const needsClientMultiFilter =
+        filters.assignedTos.length > 1 ||
+        filters.assignedTos.includes(UNASSIGNED_FILTER_VALUE);
       return bcfService.getTopics(projectId, {
         ...(looksLikeCode
           ? { server_assigned_id: trimmedSearch.toUpperCase() }
@@ -116,14 +184,26 @@ export const BcfIssuesPanel: React.FC = () => {
           ? { topic_status: filters.statuses.join(',') }
           : {}),
         ...(filters.topicType ? { topic_type: filters.topicType } : {}),
-        ...(filters.assignedTo ? { assigned_to: filters.assignedTo } : {}),
+        ...(singleServerAssignee ? { assigned_to: singleServerAssignee } : {}),
         ...(filters.label ? { labels: filters.label } : {}),
         $orderby: filters.orderBy,
-        $top: 100,
+        $top: needsClientMultiFilter ? 250 : 100,
       });
     },
     enabled: isRemoteReady,
   });
+
+  const filteredTopics = useMemo(() => {
+    const raw = topicsQuery.data ?? [];
+    if (filters.assignedTos.length === 0) return raw;
+    const wanted = new Set(filters.assignedTos.map((v) => v.toLowerCase()));
+    const includeUnassigned = wanted.has(UNASSIGNED_FILTER_VALUE.toLowerCase());
+    return raw.filter((t) => {
+      const assignee = (t.assigned_to ?? '').trim().toLowerCase();
+      if (!assignee) return includeUnassigned;
+      return wanted.has(assignee);
+    });
+  }, [filters.assignedTos, topicsQuery.data]);
 
   const requestCaptureViewpoint = useCallback(
     async (modalTitle?: string): Promise<CreateViewpointPayload | null> => {
@@ -172,10 +252,11 @@ export const BcfIssuesPanel: React.FC = () => {
       return;
     }
 
+    const isJpeg = finalSnapshotDataUrl.startsWith('data:image/jpeg');
     const updatedPayload: CreateViewpointPayload = {
       ...current.draft.payload,
       snapshot: {
-        snapshot_type: 'png',
+        snapshot_type: isJpeg ? 'jpg' : 'png',
         snapshot_data: finalSnapshotDataUrl,
       },
     };
@@ -201,9 +282,15 @@ export const BcfIssuesPanel: React.FC = () => {
       }
       if (vp) {
         await applyBcfViewpoint(vp);
+      } else {
+        const msg = 'Este tópico no tiene ningún punto de vista guardado.';
+        setBannerError(msg);
+        setViewerToastError(msg);
       }
     } catch (err) {
-      setBannerError(getApiErrorMessage(err));
+      const msg = getApiErrorMessage(err);
+      setBannerError(msg);
+      setViewerToastError(msg);
     }
   };
 
@@ -255,8 +342,7 @@ export const BcfIssuesPanel: React.FC = () => {
           <p className="text-[11px] text-asphalt-300 leading-relaxed">
             Sin proyecto activo puedes guardar puntos de vista 3D y descargar
             capturas PNG de tus modelos locales. Selecciona un proyecto en la
-            barra superior para gestionar tópicos colaborativos{' '}
-            <strong className="text-pavasal-400">BCF 3.0</strong>.
+            barra superior para gestionar tópicos colaborativos.
           </p>
         </div>
 
@@ -375,7 +461,7 @@ export const BcfIssuesPanel: React.FC = () => {
       ) : (
         <TopicListPanel
           projectId={projectId}
-          topics={topicsQuery.data ?? []}
+          topics={filteredTopics}
           isLoading={topicsQuery.isLoading}
           errorMessage={
             bannerError ||

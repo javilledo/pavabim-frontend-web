@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { compressCanvasToBudgetDataUrl } from '../../viewer/BcfViewerBridge';
 
 export type RedlineTool = 'arrow' | 'rect' | 'cloud' | 'text';
 
@@ -353,7 +354,7 @@ export const SnapshotRedlineModal: React.FC<SnapshotRedlineModalProps> = ({
       onConfirm(rawSnapshotDataUrl);
       return;
     }
-    onConfirm(canvas.toDataURL('image/png'));
+    onConfirm(compressCanvasToBudgetDataUrl(canvas).dataUrl);
   };
 
   return (
@@ -367,7 +368,7 @@ export const SnapshotRedlineModal: React.FC<SnapshotRedlineModalProps> = ({
               {title}
             </h3>
             <span className="hidden sm:inline-block rounded bg-asphalt-800 px-2 py-0.5 text-[10px] font-mono text-asphalt-300">
-              {resolvedWidth}×{resolvedHeight}px (BCF 3.0)
+              {resolvedWidth}×{resolvedHeight}px
             </span>
           </div>
           <button

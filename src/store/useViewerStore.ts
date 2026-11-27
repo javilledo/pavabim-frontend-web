@@ -121,6 +121,7 @@ interface ViewerState {
   currentProject: ProjectWithRole | null;
   remoteModels: ModelStatusResponse[];
   activeBcfTopicId: string | null;
+  isCreatingBcfTopic: boolean;
 
   // Actions
   setActiveTool: (tool: ActiveTool) => void;
@@ -184,6 +185,8 @@ interface ViewerState {
   setCurrentProjectById: (projectId: string | null) => void;
   setRemoteModels: (models: ModelStatusResponse[]) => void;
   setActiveBcfTopicId: (topicId: string | null) => void;
+  setIsCreatingBcfTopic: (creating: boolean) => void;
+  openCreateBcfTopic: () => void;
   resetProjectContext: () => void;
 }
 
@@ -224,6 +227,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
   currentProject: null,
   remoteModels: [],
   activeBcfTopicId: null,
+  isCreatingBcfTopic: false,
 
   setActiveTool: (tool) => set({ activeTool: tool }),
 
@@ -559,6 +563,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
         currentProject: project,
         currentProjectId: nextId,
         activeBcfTopicId: isProjectChanged ? null : state.activeBcfTopicId,
+        isCreatingBcfTopic: isProjectChanged ? false : state.isCreatingBcfTopic,
         remoteModels: isProjectChanged ? [] : state.remoteModels,
         loadedModels: nextLoadedModels,
         ...(isProjectChanged
@@ -597,7 +602,22 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
 
   setRemoteModels: (remoteModels) => set({ remoteModels }),
 
-  setActiveBcfTopicId: (activeBcfTopicId) => set({ activeBcfTopicId }),
+  setActiveBcfTopicId: (activeBcfTopicId) =>
+    set((state) => ({
+      activeBcfTopicId,
+      isCreatingBcfTopic:
+        activeBcfTopicId !== null ? false : state.isCreatingBcfTopic,
+    })),
+
+  setIsCreatingBcfTopic: (isCreatingBcfTopic) => set({ isCreatingBcfTopic }),
+
+  openCreateBcfTopic: () =>
+    set({
+      rightSidebarTab: 'bcf',
+      isRightSidebarCollapsed: false,
+      activeBcfTopicId: null,
+      isCreatingBcfTopic: true,
+    }),
 
   resetProjectContext: () => {
     set((state) => ({
@@ -606,6 +626,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       currentProject: null,
       remoteModels: [],
       activeBcfTopicId: null,
+      isCreatingBcfTopic: false,
       loadedModels: state.loadedModels.map((m) =>
         m.projectId ? { ...m, visible: false } : m,
       ),

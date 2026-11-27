@@ -74,8 +74,8 @@ export const RightSidebar: React.FC = () => {
               ? 'bg-pavasal-500/20 text-pavasal-400'
               : 'text-asphalt-400 hover:text-asphalt-100 hover:bg-asphalt-800'
           }`}
-          title="Abrir Tópicos BCF 3.0"
-          aria-label="Tópicos BCF 3.0"
+          title="Abrir Tópicos"
+          aria-label="Tópicos"
         >
           📌
         </button>
@@ -109,7 +109,7 @@ export const RightSidebar: React.FC = () => {
           type="button"
           onClick={() => setActiveTab('bcf')}
           className={tabButtonClass(activeTab === 'bcf')}
-          title="Gestión de Tópicos BCF 3.0"
+          title="Gestión de Tópicos"
         >
           Tópicos
         </button>

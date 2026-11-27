@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type * as FRAGS from '@thatopen/fragments';
+import { useProjectRole } from '../../hooks/useProjectRole';
 import { useViewerStore } from '../../store/useViewerStore';
 import {
   createEmptyFilterCondition,
@@ -48,7 +49,7 @@ interface TreeContextMenuState {
 
 const DATA_CHUNK_SIZE = 400;
 const INITIAL_VISIBLE_ITEMS = 200;
-const CONTEXT_MENU_WIDTH = 176;
+const CONTEXT_MENU_WIDTH = 196;
 const CONTEXT_MENU_HEIGHT = 44;
 
 function escapeRegExp(value: string): string {
@@ -134,7 +135,10 @@ export const ElementsTreePanel: React.FC = () => {
     selectedElementsMap,
     hiddenElementsMap,
     currentProjectId,
+    openCreateBcfTopic,
   } = useViewerStore();
+  const { canEditBcf } = useProjectRole();
+  const canCreateTopic = Boolean(currentProjectId && canEditBcf);
   const {
     fragments,
     focusElement,
@@ -768,8 +772,9 @@ export const ElementsTreePanel: React.FC = () => {
       setActiveGroupKey(target.groupKey);
       void focusSelectionMap(target.selectionByModel, false);
 
+      const menuHeight = canCreateTopic ? 80 : CONTEXT_MENU_HEIGHT;
       const maxX = Math.max(8, window.innerWidth - CONTEXT_MENU_WIDTH - 8);
-      const maxY = Math.max(8, window.innerHeight - CONTEXT_MENU_HEIGHT - 8);
+      const maxY = Math.max(8, window.innerHeight - menuHeight - 8);
       setContextMenu({
         x: Math.min(Math.max(8, e.clientX), maxX),
         y: Math.min(Math.max(8, e.clientY), maxY),
@@ -778,7 +783,7 @@ export const ElementsTreePanel: React.FC = () => {
         selectionByModel: target.selectionByModel,
       });
     },
-    [focusSelectionMap],
+    [canCreateTopic, focusSelectionMap],
   );
 
   const handleZoomToContextTarget = useCallback(() => {
@@ -788,6 +793,15 @@ export const ElementsTreePanel: React.FC = () => {
     setActiveGroupKey(target.groupKey);
     void focusSelectionMap(target.selectionByModel, true);
   }, [contextMenu, focusSelectionMap]);
+
+  const handleCreateTopicFromContextTarget = useCallback(() => {
+    if (!contextMenu) return;
+    const target = contextMenu;
+    setContextMenu(null);
+    setActiveGroupKey(target.groupKey);
+    void focusSelectionMap(target.selectionByModel, false);
+    openCreateBcfTopic();
+  }, [contextMenu, focusSelectionMap, openCreateBcfTopic]);
 
   if (projectLoadedModels.length === 0) {
     return (
@@ -1173,6 +1187,29 @@ export const ElementsTreePanel: React.FC = () => {
             </svg>
             <span>Zoom a objeto</span>
           </button>
+          {canCreateTopic && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={handleCreateTopicFromContextTarget}
+              title={`Crear nuevo tópico para ${contextMenu.label}`}
+              className="flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-xs font-medium text-asphalt-100 transition-colors hover:bg-pavasal-500/20 hover:text-pavasal-300"
+            >
+              <svg
+                className="h-3.5 w-3.5 shrink-0 text-pavasal-400"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                <path d="M12 7v6M9 10h6" />
+              </svg>
+              <span>Crear nuevo tópico</span>
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -1,17 +1,31 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { bcfService } from '../../api/bcf.service';
 import type { ProjectMember } from '../../types/api.types';
 import type {
   BcfProjectExtensions,
   BcfTopic,
 } from '../../types/bcf.types';
+import {
+  filterAllowedTopicStatuses,
+  PAVABIM_DISCIPLINE_LABELS,
+  translateTopicPriority,
+  translateTopicStatus,
+  translateTopicType,
+} from '../../utils/bcfLabels';
 import { AuthenticatedImage } from '../common/AuthenticatedImage';
+import {
+  ExpandImageIcon,
+  GoToViewpointIcon,
+  ViewpointImageModal,
+} from './ViewpointImageModal';
+
+export const UNASSIGNED_FILTER_VALUE = '__UNASSIGNED__';
 
 export interface TopicListFilters {
   search: string;
   statuses: string[];
   topicType: string;
-  assignedTo: string;
+  assignedTos: string[];
   label: string;
   orderBy: string;
 }
@@ -128,8 +142,38 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
   const [applyingThumbGuid, setApplyingThumbGuid] = useState<string | null>(
     null,
   );
+  const [previewImage, setPreviewImage] = useState<{
+    src: string;
+    title: string;
+    topic: BcfTopic;
+  } | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [isAssigneeMenuOpen, setIsAssigneeMenuOpen] = useState(false);
+  const assigneeDropdownRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isAssigneeMenuOpen) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      if (
+        assigneeDropdownRef.current &&
+        !assigneeDropdownRef.current.contains(e.target as Node)
+      ) {
+        setIsAssigneeMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsAssigneeMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isAssigneeMenuOpen]);
 
   const memberByEmail = useMemo(() => {
     const map = new Map<string, ProjectMember>();
@@ -140,25 +184,43 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
   }, [members]);
 
   const assignableUsers = useMemo(() => {
-    const emails = new Set<string>();
-    for (const email of extensions?.user_id_type ?? []) {
-      if (email?.trim()) emails.add(email.trim());
-    }
+    const emailsByLower = new Map<string, string>();
     for (const m of members) {
-      if (m.email?.trim()) emails.add(m.email.trim());
+      const clean = m.email?.trim();
+      if (clean) emailsByLower.set(clean.toLowerCase(), clean);
     }
-    return Array.from(emails).sort((a, b) => a.localeCompare(b));
-  }, [extensions?.user_id_type, members]);
+    for (const email of extensions?.user_id_type ?? []) {
+      const clean = email?.trim();
+      if (clean && !emailsByLower.has(clean.toLowerCase())) {
+        emailsByLower.set(clean.toLowerCase(), clean);
+      }
+    }
+    return Array.from(emailsByLower.values()).sort((a, b) => {
+      const ma = memberByEmail.get(a.toLowerCase());
+      const mb = memberByEmail.get(b.toLowerCase());
+      const la = ma?.displayName || a;
+      const lb = mb?.displayName || b;
+      return la.localeCompare(lb, 'es', { sensitivity: 'base' });
+    });
+  }, [extensions?.user_id_type, memberByEmail, members]);
 
-  const statuses = extensions?.topic_status ?? [];
+  const statuses = useMemo(
+    () =>
+      filterAllowedTopicStatuses(
+        extensions?.topic_status?.length
+          ? extensions.topic_status
+          : ['Open', 'In Progress', 'Resolved', 'Closed'],
+      ),
+    [extensions?.topic_status],
+  );
   const types = extensions?.topic_type ?? [];
-  const labels = extensions?.topic_label ?? [];
+  const labels = PAVABIM_DISCIPLINE_LABELS;
 
   const hasActiveFilters = Boolean(
     filters.search.trim() ||
       filters.statuses.length > 0 ||
       filters.topicType ||
-      filters.assignedTo ||
+      filters.assignedTos.length > 0 ||
       filters.label,
   );
 
@@ -173,6 +235,23 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
       ? filters.statuses.filter((s) => s !== status)
       : [...filters.statuses, status];
     onChangeFilters({ ...filters, statuses: nextStatuses });
+  };
+
+  const toggleAssigneeFilter = (value: string) => {
+    const lowerTarget = value.toLowerCase();
+    const exists = filters.assignedTos.some(
+      (item) => item.toLowerCase() === lowerTarget,
+    );
+    const nextAssignedTos = exists
+      ? filters.assignedTos.filter((item) => item.toLowerCase() !== lowerTarget)
+      : [...filters.assignedTos, value];
+    onChangeFilters({ ...filters, assignedTos: nextAssignedTos });
+  };
+
+  const resolveAssigneeOptionLabel = (value: string): string => {
+    if (value === UNASSIGNED_FILTER_VALUE) return 'Sin asignar';
+    const member = memberByEmail.get(value.toLowerCase());
+    return member?.displayName || value;
   };
 
   const toggleTopicChecked = (guid: string) => {
@@ -230,7 +309,7 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
           <h3 className="text-[11px] font-semibold uppercase tracking-wider text-pavasal-400 truncate">
-            Tópicos BCF 3.0
+            Tópicos
           </h3>
           <span className="rounded-full bg-asphalt-800 border border-asphalt-700 px-1.5 py-0.5 text-[10px] font-mono text-asphalt-200 shrink-0">
             {totalCount ?? topics.length}
@@ -248,14 +327,14 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
                 ? `Exportar ${validSelectedGuids.length} tópicos seleccionados a archivo .bcf`
                 : hasActiveFilters
                   ? `Exportar los ${topics.length} tópicos filtrados a archivo .bcf`
-                  : 'Exportar todos los tópicos del proyecto a archivo .bcf (BCF 3.0)'
+                  : 'Exportar todos los tópicos del proyecto a archivo .bcf'
             }
           >
             {isExporting
               ? 'Exportando...'
               : validSelectedGuids.length > 0
                 ? `Exportar BCF (${validSelectedGuids.length})`
-                : 'Exportar BCF 3.0'}
+                : 'Exportar BCF'}
           </button>
 
           {canEditBcf && (
@@ -287,12 +366,11 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
           className={`px-2 py-1.5 rounded border text-[11px] font-medium transition-colors shrink-0 ${
             showAdvancedFilters ||
             filters.topicType ||
-            filters.assignedTo ||
             filters.label
               ? 'border-pavasal-500/70 bg-pavasal-500/15 text-pavasal-400'
               : 'border-asphalt-700 bg-asphalt-900 text-asphalt-300 hover:text-asphalt-100'
           }`}
-          title="Filtros por tipo, usuario asignado, disciplina y orden"
+          title="Filtros por tipo, disciplina y orden"
         >
           Filtros ▾
         </button>
@@ -325,14 +403,206 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
                     : 'border-asphalt-700 bg-asphalt-900/80 text-asphalt-300 hover:border-asphalt-500'
                 }`}
               >
-                {st}
+                {translateTopicStatus(st)}
               </button>
             );
           })}
         </div>
       )}
 
-      {/* Collapsible Dropdown Filters (Type, Assignee, Label/Discipline, Sort) */}
+      {/* Top Multi-Select "Asignado a" Filter */}
+      <div ref={assigneeDropdownRef} className="relative space-y-1">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setIsAssigneeMenuOpen((prev) => !prev)}
+            className={`flex-1 min-w-0 flex items-center justify-between gap-2 rounded border px-2.5 py-1.5 text-[11px] transition-colors ${
+              filters.assignedTos.length > 0 || isAssigneeMenuOpen
+                ? 'border-pavasal-500/70 bg-pavasal-500/10 text-asphalt-100'
+                : 'border-asphalt-700 bg-asphalt-900 text-asphalt-200 hover:border-asphalt-500'
+            }`}
+            title="Filtrar tópicos por uno o varios usuarios asignados"
+          >
+            <span className="flex items-center gap-1.5 min-w-0 truncate">
+              <svg
+                className="w-3.5 h-3.5 shrink-0 text-pavasal-400"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+              <span className="text-asphalt-400 shrink-0">Asignado a:</span>
+              {filters.assignedTos.length === 0 ? (
+                <span className="text-asphalt-300 truncate">
+                  Todos los usuarios
+                </span>
+              ) : filters.assignedTos.length === 1 ? (
+                <span className="font-semibold text-pavasal-300 truncate">
+                  {resolveAssigneeOptionLabel(filters.assignedTos[0])}
+                </span>
+              ) : (
+                <span className="font-semibold text-pavasal-300 truncate">
+                  {filters.assignedTos.length} personas seleccionadas
+                </span>
+              )}
+            </span>
+            <span className="text-[10px] text-asphalt-400 shrink-0">
+              {isAssigneeMenuOpen ? '▴' : '▾'}
+            </span>
+          </button>
+
+          {filters.assignedTos.length > 0 && (
+            <button
+              type="button"
+              onClick={() => onChangeFilters({ ...filters, assignedTos: [] })}
+              title="Limpiar filtro de usuarios asignados"
+              className="rounded border border-asphalt-700 bg-asphalt-900 px-2 py-1.5 text-[10px] font-medium text-asphalt-300 hover:border-pavasal-500/60 hover:text-pavasal-300 transition-colors shrink-0"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+
+        {/* Active Assignee Pills */}
+        {filters.assignedTos.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1">
+            {filters.assignedTos.map((val) => {
+              const label = resolveAssigneeOptionLabel(val);
+              const member =
+                val !== UNASSIGNED_FILTER_VALUE
+                  ? memberByEmail.get(val.toLowerCase())
+                  : undefined;
+              return (
+                <span
+                  key={val}
+                  className="inline-flex items-center gap-1 rounded-full border border-pavasal-500/45 bg-pavasal-500/15 pl-1.5 pr-1 py-0.5 text-[10px] font-medium text-pavasal-300 max-w-full"
+                >
+                  {member?.photoURL ? (
+                    <img
+                      src={member.photoURL}
+                      alt={label}
+                      referrerPolicy="no-referrer"
+                      className="w-3.5 h-3.5 rounded-full object-cover shrink-0"
+                    />
+                  ) : val !== UNASSIGNED_FILTER_VALUE ? (
+                    <span className="w-3.5 h-3.5 rounded-full bg-pavasal-500/25 text-[8px] font-bold text-pavasal-200 flex items-center justify-center shrink-0">
+                      {getInitials(label)}
+                    </span>
+                  ) : null}
+                  <span className="truncate max-w-[140px]">{label}</span>
+                  <button
+                    type="button"
+                    onClick={() => toggleAssigneeFilter(val)}
+                    aria-label={`Quitar filtro ${label}`}
+                    className="rounded-full px-1 text-pavasal-300 hover:bg-pavasal-500/30 hover:text-white leading-none"
+                  >
+                    ×
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Multi-Select Dropdown Popover */}
+        {isAssigneeMenuOpen && (
+          <div className="absolute left-0 right-0 top-full mt-1 z-30 rounded-md border border-asphalt-700 bg-asphalt-950 shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between gap-2 border-b border-asphalt-800 px-2.5 py-1.5 text-[10px]">
+              <span className="font-semibold uppercase tracking-wider text-pavasal-400">
+                Filtrar por asignado
+              </span>
+              {filters.assignedTos.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChangeFilters({ ...filters, assignedTos: [] })
+                  }
+                  className="font-medium text-pavasal-400 hover:text-pavasal-300"
+                >
+                  Todos
+                </button>
+              )}
+            </div>
+
+            <div className="max-h-52 overflow-y-auto py-1 divide-y divide-asphalt-900">
+              {/* Unassigned option */}
+              <label className="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-asphalt-800/80 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={filters.assignedTos.includes(UNASSIGNED_FILTER_VALUE)}
+                  onChange={() => toggleAssigneeFilter(UNASSIGNED_FILTER_VALUE)}
+                  className="accent-pavasal-500 rounded shrink-0"
+                />
+                <span className="w-5 h-5 rounded-full border border-dashed border-asphalt-600 text-[10px] text-asphalt-400 flex items-center justify-center shrink-0">
+                  —
+                </span>
+                <span className="text-[11px] italic text-asphalt-300 truncate">
+                  Sin asignar
+                </span>
+              </label>
+
+              {assignableUsers.length === 0 ? (
+                <div className="px-2.5 py-2 text-[11px] text-asphalt-400">
+                  No hay usuarios en el proyecto.
+                </div>
+              ) : (
+                assignableUsers.map((email) => {
+                  const member = memberByEmail.get(email.toLowerCase());
+                  const display = member?.displayName || email;
+                  const checked = filters.assignedTos.some(
+                    (item) => item.toLowerCase() === email.toLowerCase(),
+                  );
+                  return (
+                    <label
+                      key={email}
+                      className="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-asphalt-800/80 transition-colors"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleAssigneeFilter(email)}
+                        className="accent-pavasal-500 rounded shrink-0"
+                      />
+                      {member?.photoURL ? (
+                        <img
+                          src={member.photoURL}
+                          alt={display}
+                          referrerPolicy="no-referrer"
+                          className="w-5 h-5 rounded-full object-cover shrink-0"
+                        />
+                      ) : (
+                        <span className="w-5 h-5 rounded-full bg-pavasal-500/20 border border-pavasal-500/40 text-[9px] font-bold text-pavasal-300 flex items-center justify-center shrink-0">
+                          {getInitials(display)}
+                        </span>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[11px] font-medium text-asphalt-100 truncate">
+                          {display}
+                        </div>
+                        {member?.displayName && (
+                          <div className="text-[10px] text-asphalt-400 truncate">
+                            {email}
+                          </div>
+                        )}
+                      </div>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Collapsible Dropdown Filters (Type, Label/Discipline, Sort) */}
       {showAdvancedFilters && (
         <div className="rounded border border-asphalt-700 bg-asphalt-950/70 p-2 space-y-2">
           <div className="grid grid-cols-2 gap-1.5">
@@ -350,7 +620,7 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
                 <option value="">Todos los tipos</option>
                 {types.map((t) => (
                   <option key={t} value={t}>
-                    {t}
+                    {translateTopicType(t)}
                   </option>
                 ))}
               </select>
@@ -358,7 +628,7 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
 
             <div>
               <label className="block text-[10px] text-asphalt-400 mb-0.5">
-                Disciplina / Etiqueta
+                Disciplinas
               </label>
               <select
                 value={filters.label}
@@ -377,49 +647,22 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-1.5">
-            <div>
-              <label className="block text-[10px] text-asphalt-400 mb-0.5">
-                Asignado a
-              </label>
-              <select
-                value={filters.assignedTo}
-                onChange={(e) =>
-                  onChangeFilters({ ...filters, assignedTo: e.target.value })
-                }
-                className="w-full rounded border border-asphalt-700 bg-asphalt-900 px-1.5 py-1 text-[11px] text-asphalt-100 focus:border-pavasal-500 focus:outline-none"
-              >
-                <option value="">Cualquier usuario</option>
-                {assignableUsers.map((email) => {
-                  const member = memberByEmail.get(email.toLowerCase());
-                  return (
-                    <option key={email} value={email}>
-                      {member?.displayName
-                        ? `${member.displayName} (${email})`
-                        : email}
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-[10px] text-asphalt-400 mb-0.5">
-                Ordenar por
-              </label>
-              <select
-                value={filters.orderBy}
-                onChange={(e) =>
-                  onChangeFilters({ ...filters, orderBy: e.target.value })
-                }
-                className="w-full rounded border border-asphalt-700 bg-asphalt-900 px-1.5 py-1 text-[11px] text-asphalt-100 focus:border-pavasal-500 focus:outline-none"
-              >
-                <option value="modified_date desc">Recientes (modif.)</option>
-                <option value="creation_date desc">Fecha creación</option>
-                <option value="server_assigned_id asc">ID (TOP-001 ↑)</option>
-                <option value="index asc">Índice ↑</option>
-              </select>
-            </div>
+          <div>
+            <label className="block text-[10px] text-asphalt-400 mb-0.5">
+              Ordenar por
+            </label>
+            <select
+              value={filters.orderBy}
+              onChange={(e) =>
+                onChangeFilters({ ...filters, orderBy: e.target.value })
+              }
+              className="w-full rounded border border-asphalt-700 bg-asphalt-900 px-1.5 py-1 text-[11px] text-asphalt-100 focus:border-pavasal-500 focus:outline-none"
+            >
+              <option value="modified_date desc">Recientes (modif.)</option>
+              <option value="creation_date desc">Fecha creación</option>
+              <option value="server_assigned_id asc">ID (TOP-001 ↑)</option>
+              <option value="index asc">Índice ↑</option>
+            </select>
           </div>
 
           {hasActiveFilters && (
@@ -431,7 +674,7 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
                     search: '',
                     statuses: [],
                     topicType: '',
-                    assignedTo: '',
+                    assignedTos: [],
                     label: '',
                     orderBy: filters.orderBy,
                   })
@@ -494,7 +737,7 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
           <p className="text-[11px]">
             {hasActiveFilters
               ? 'Prueba a ajustar o limpiar los filtros de búsqueda.'
-              : 'Crea el primer tópico BCF 3.0 capturando la vista 3D actual.'}
+              : 'Crea el primer tópico capturando la vista 3D actual.'}
           </p>
         </div>
       ) : (
@@ -513,6 +756,11 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
               assigneeMember?.displayName || topic.assigned_to || '';
             const overdue = isDateOverdue(topic.due_date, topic.topic_status);
             const isApplyingThumb = applyingThumbGuid === topic.guid;
+            const hasViewpoint = Boolean(
+              thumbPath ||
+                topic.default_viewpoint_guid ||
+                (topic.viewpoints_count ?? 0) > 0,
+            );
 
             return (
               <div
@@ -540,22 +788,28 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
                     className="mt-1 accent-pavasal-500 shrink-0 cursor-pointer"
                   />
 
-                  {/* Clickable Viewpoint Thumbnail (applies 3D viewpoint directly without opening detail) */}
+                  {/* Clickable Snapshot Thumbnail (opens full-size image modal) */}
                   {thumbPath && (
                     <button
                       type="button"
-                      disabled={!isEngineReady || isApplyingThumb}
-                      onClick={(e) => void handleThumbClick(e, topic)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setPreviewImage({
+                          src: thumbPath,
+                          title: `${topic.server_assigned_id || 'Tópico'} · ${topic.title}`,
+                          topic,
+                        });
+                      }}
                       className="relative w-20 h-16 rounded border border-asphalt-700 overflow-hidden shrink-0 group/thumb hover:border-pavasal-400 focus:outline-none"
-                      title="Clic en la miniatura para aplicar este punto de vista directamente en el visor 3D"
+                      title="Ver imagen ampliada"
                     >
                       <AuthenticatedImage
                         src={thumbPath}
                         alt={topic.title}
                         className="w-full h-full object-cover"
                       />
-                      <span className="absolute inset-0 bg-black/55 opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-center justify-center text-[9px] font-bold text-pavasal-400 px-1 text-center">
-                        {isApplyingThumb ? 'Aplicando...' : 'Ir a vista 3D'}
+                      <span className="pointer-events-none absolute inset-0 bg-black/50 opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-center justify-center text-white">
+                        <ExpandImageIcon className="w-4 h-4 text-pavasal-400" />
                       </span>
                     </button>
                   )}
@@ -570,21 +824,40 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
                         <span
                           className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold shrink-0 ${getStatusBadgeStyle(topic.topic_status)}`}
                         >
-                          {topic.topic_status}
+                          {translateTopicStatus(topic.topic_status)}
                         </span>
                       </div>
 
-                      {topic.priority && (
-                        <span
-                          className={`inline-flex items-center gap-1 text-[10px] shrink-0 ${prio.textClass}`}
-                          title={`Prioridad: ${topic.priority}`}
-                        >
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {topic.priority && (
                           <span
-                            className={`w-1.5 h-1.5 rounded-full ${prio.dotClass}`}
-                          />
-                          {topic.priority}
-                        </span>
-                      )}
+                            className={`inline-flex items-center gap-1 text-[10px] shrink-0 ${prio.textClass}`}
+                            title={`Prioridad: ${translateTopicPriority(topic.priority)}`}
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full ${prio.dotClass}`}
+                            />
+                            {translateTopicPriority(topic.priority)}
+                          </span>
+                        )}
+
+                        {hasViewpoint && (
+                          <button
+                            type="button"
+                            disabled={!isEngineReady || isApplyingThumb}
+                            onClick={(e) => void handleThumbClick(e, topic)}
+                            title={
+                              isApplyingThumb
+                                ? 'Aplicando punto de vista...'
+                                : 'Ir al punto de vista en el visor 3D'
+                            }
+                            aria-label={`Ir al punto de vista de ${topic.server_assigned_id || topic.title} en 3D`}
+                            className="rounded border border-pavasal-500/40 bg-pavasal-500/15 p-1 text-pavasal-400 hover:bg-pavasal-500 hover:text-asphalt-950 disabled:opacity-40 transition-colors"
+                          >
+                            <GoToViewpointIcon className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <h4 className="font-semibold text-asphalt-50 text-xs leading-snug line-clamp-2">
@@ -593,7 +866,7 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
 
                     <div className="flex flex-wrap items-center gap-1 text-[10px] text-asphalt-400">
                       <span className="rounded bg-asphalt-950/80 px-1.5 py-px text-asphalt-300">
-                        {topic.topic_type}
+                        {translateTopicType(topic.topic_type)}
                       </span>
                       {(topic.labels ?? []).slice(0, 2).map((lbl) => (
                         <span
@@ -668,6 +941,21 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
           })}
         </div>
       )}
+
+      <ViewpointImageModal
+        isOpen={Boolean(previewImage)}
+        src={previewImage?.src ?? null}
+        title={previewImage?.title ?? 'Captura del tópico'}
+        canNavigate3D={isEngineReady}
+        onNavigate3D={
+          previewImage
+            ? () => {
+                void onQuickApplyViewpoint(previewImage.topic);
+              }
+            : undefined
+        }
+        onClose={() => setPreviewImage(null)}
+      />
     </div>
   );
 };
