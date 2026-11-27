@@ -26,7 +26,7 @@ export interface TopicListFilters {
   statuses: string[];
   topicType: string;
   assignedTos: string[];
-  label: string;
+  labels: string[];
   orderBy: string;
 }
 
@@ -150,21 +150,33 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
   const [isExporting, setIsExporting] = useState(false);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [isAssigneeMenuOpen, setIsAssigneeMenuOpen] = useState(false);
+  const [isDisciplineMenuOpen, setIsDisciplineMenuOpen] = useState(false);
   const assigneeDropdownRef = useRef<HTMLDivElement | null>(null);
+  const disciplineDropdownRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!isAssigneeMenuOpen) return;
+    if (!isAssigneeMenuOpen && !isDisciplineMenuOpen) return;
     const handlePointerDown = (e: MouseEvent) => {
+      const target = e.target as Node;
       if (
+        isAssigneeMenuOpen &&
         assigneeDropdownRef.current &&
-        !assigneeDropdownRef.current.contains(e.target as Node)
+        !assigneeDropdownRef.current.contains(target)
       ) {
         setIsAssigneeMenuOpen(false);
+      }
+      if (
+        isDisciplineMenuOpen &&
+        disciplineDropdownRef.current &&
+        !disciplineDropdownRef.current.contains(target)
+      ) {
+        setIsDisciplineMenuOpen(false);
       }
     };
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setIsAssigneeMenuOpen(false);
+        setIsDisciplineMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handlePointerDown);
@@ -173,7 +185,7 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
       document.removeEventListener('mousedown', handlePointerDown);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isAssigneeMenuOpen]);
+  }, [isAssigneeMenuOpen, isDisciplineMenuOpen]);
 
   const memberByEmail = useMemo(() => {
     const map = new Map<string, ProjectMember>();
@@ -221,7 +233,7 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
       filters.statuses.length > 0 ||
       filters.topicType ||
       filters.assignedTos.length > 0 ||
-      filters.label,
+      filters.labels.length > 0,
   );
 
   const validSelectedGuids = useMemo(() => {
@@ -252,6 +264,14 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
     if (value === UNASSIGNED_FILTER_VALUE) return 'Sin asignar';
     const member = memberByEmail.get(value.toLowerCase());
     return member?.displayName || value;
+  };
+
+  const toggleDisciplineFilter = (lbl: string) => {
+    const exists = filters.labels.includes(lbl);
+    const nextLabels = exists
+      ? filters.labels.filter((item) => item !== lbl)
+      : [...filters.labels, lbl];
+    onChangeFilters({ ...filters, labels: nextLabels });
   };
 
   const toggleTopicChecked = (guid: string) => {
@@ -364,13 +384,11 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
           type="button"
           onClick={() => setShowAdvancedFilters((prev) => !prev)}
           className={`px-2 py-1.5 rounded border text-[11px] font-medium transition-colors shrink-0 ${
-            showAdvancedFilters ||
-            filters.topicType ||
-            filters.label
+            showAdvancedFilters || filters.topicType
               ? 'border-pavasal-500/70 bg-pavasal-500/15 text-pavasal-400'
               : 'border-asphalt-700 bg-asphalt-900 text-asphalt-300 hover:text-asphalt-100'
           }`}
-          title="Filtros por tipo, disciplina y orden"
+          title="Filtros por tipo y orden"
         >
           Filtros ▾
         </button>
@@ -415,7 +433,10 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
         <div className="flex items-center gap-1.5">
           <button
             type="button"
-            onClick={() => setIsAssigneeMenuOpen((prev) => !prev)}
+            onClick={() => {
+              setIsDisciplineMenuOpen(false);
+              setIsAssigneeMenuOpen((prev) => !prev);
+            }}
             className={`flex-1 min-w-0 flex items-center justify-between gap-2 rounded border px-2.5 py-1.5 text-[11px] transition-colors ${
               filters.assignedTos.length > 0 || isAssigneeMenuOpen
                 ? 'border-pavasal-500/70 bg-pavasal-500/10 text-asphalt-100'
@@ -602,7 +623,132 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
         )}
       </div>
 
-      {/* Collapsible Dropdown Filters (Type, Label/Discipline, Sort) */}
+      {/* Top Multi-Select "Disciplinas" Filter */}
+      <div ref={disciplineDropdownRef} className="relative space-y-1">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              setIsAssigneeMenuOpen(false);
+              setIsDisciplineMenuOpen((prev) => !prev);
+            }}
+            className={`flex-1 min-w-0 flex items-center justify-between gap-2 rounded border px-2.5 py-1.5 text-[11px] transition-colors ${
+              filters.labels.length > 0 || isDisciplineMenuOpen
+                ? 'border-pavasal-500/70 bg-pavasal-500/10 text-asphalt-100'
+                : 'border-asphalt-700 bg-asphalt-900 text-asphalt-200 hover:border-asphalt-500'
+            }`}
+            title="Filtrar tópicos por una o varias disciplinas"
+          >
+            <span className="flex items-center gap-1.5 min-w-0 truncate">
+              <svg
+                className="w-3.5 h-3.5 shrink-0 text-pavasal-400"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" />
+                <line x1="7" y1="7" x2="7.01" y2="7" />
+              </svg>
+              <span className="text-asphalt-400 shrink-0">Disciplinas:</span>
+              {filters.labels.length === 0 ? (
+                <span className="text-asphalt-300 truncate">Todas</span>
+              ) : filters.labels.length === 1 ? (
+                <span className="font-semibold text-pavasal-300 truncate">
+                  {filters.labels[0]}
+                </span>
+              ) : (
+                <span className="font-semibold text-pavasal-300 truncate">
+                  {filters.labels.length} disciplinas seleccionadas
+                </span>
+              )}
+            </span>
+            <span className="text-[10px] text-asphalt-400 shrink-0">
+              {isDisciplineMenuOpen ? '▴' : '▾'}
+            </span>
+          </button>
+
+          {filters.labels.length > 0 && (
+            <button
+              type="button"
+              onClick={() => onChangeFilters({ ...filters, labels: [] })}
+              title="Limpiar filtro de disciplinas"
+              className="rounded border border-asphalt-700 bg-asphalt-900 px-2 py-1.5 text-[10px] font-medium text-asphalt-300 hover:border-pavasal-500/60 hover:text-pavasal-300 transition-colors shrink-0"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+
+        {/* Active Discipline Pills */}
+        {filters.labels.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1">
+            {filters.labels.map((lbl) => (
+              <span
+                key={lbl}
+                className="inline-flex items-center gap-1 rounded-full border border-pavasal-500/45 bg-pavasal-500/15 pl-2 pr-1 py-0.5 text-[10px] font-medium text-pavasal-300 max-w-full"
+              >
+                <span className="truncate max-w-[160px]">{lbl}</span>
+                <button
+                  type="button"
+                  onClick={() => toggleDisciplineFilter(lbl)}
+                  aria-label={`Quitar disciplina ${lbl}`}
+                  className="rounded-full px-1 text-pavasal-300 hover:bg-pavasal-500/30 hover:text-white leading-none"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Multi-Select Discipline Dropdown Popover */}
+        {isDisciplineMenuOpen && (
+          <div className="absolute left-0 right-0 top-full mt-1 z-30 rounded-md border border-asphalt-700 bg-asphalt-950 shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between gap-2 border-b border-asphalt-800 px-2.5 py-1.5 text-[10px]">
+              <span className="font-semibold uppercase tracking-wider text-pavasal-400">
+                Filtrar por disciplinas
+              </span>
+              {filters.labels.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => onChangeFilters({ ...filters, labels: [] })}
+                  className="font-medium text-pavasal-400 hover:text-pavasal-300"
+                >
+                  Todas
+                </button>
+              )}
+            </div>
+
+            <div className="max-h-56 overflow-y-auto py-1 divide-y divide-asphalt-900">
+              {labels.map((lbl) => {
+                const checked = filters.labels.includes(lbl);
+                return (
+                  <label
+                    key={lbl}
+                    className="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-asphalt-800/80 transition-colors"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleDisciplineFilter(lbl)}
+                      className="accent-pavasal-500 rounded shrink-0"
+                    />
+                    <span className="text-[11px] font-medium text-asphalt-100 truncate">
+                      {lbl}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Collapsible Dropdown Filters (Type, Sort) */}
       {showAdvancedFilters && (
         <div className="rounded border border-asphalt-700 bg-asphalt-950/70 p-2 space-y-2">
           <div className="grid grid-cols-2 gap-1.5">
@@ -628,41 +774,21 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
 
             <div>
               <label className="block text-[10px] text-asphalt-400 mb-0.5">
-                Disciplinas
+                Ordenar por
               </label>
               <select
-                value={filters.label}
+                value={filters.orderBy}
                 onChange={(e) =>
-                  onChangeFilters({ ...filters, label: e.target.value })
+                  onChangeFilters({ ...filters, orderBy: e.target.value })
                 }
                 className="w-full rounded border border-asphalt-700 bg-asphalt-900 px-1.5 py-1 text-[11px] text-asphalt-100 focus:border-pavasal-500 focus:outline-none"
               >
-                <option value="">Todas</option>
-                {labels.map((lbl) => (
-                  <option key={lbl} value={lbl}>
-                    {lbl}
-                  </option>
-                ))}
+                <option value="modified_date desc">Recientes (modif.)</option>
+                <option value="creation_date desc">Fecha creación</option>
+                <option value="server_assigned_id asc">ID (TOP-001 ↑)</option>
+                <option value="index asc">Índice ↑</option>
               </select>
             </div>
-          </div>
-
-          <div>
-            <label className="block text-[10px] text-asphalt-400 mb-0.5">
-              Ordenar por
-            </label>
-            <select
-              value={filters.orderBy}
-              onChange={(e) =>
-                onChangeFilters({ ...filters, orderBy: e.target.value })
-              }
-              className="w-full rounded border border-asphalt-700 bg-asphalt-900 px-1.5 py-1 text-[11px] text-asphalt-100 focus:border-pavasal-500 focus:outline-none"
-            >
-              <option value="modified_date desc">Recientes (modif.)</option>
-              <option value="creation_date desc">Fecha creación</option>
-              <option value="server_assigned_id asc">ID (TOP-001 ↑)</option>
-              <option value="index asc">Índice ↑</option>
-            </select>
           </div>
 
           {hasActiveFilters && (
@@ -675,7 +801,7 @@ export const TopicListPanel: React.FC<TopicListPanelProps> = ({
                     statuses: [],
                     topicType: '',
                     assignedTos: [],
-                    label: '',
+                    labels: [],
                     orderBy: filters.orderBy,
                   })
                 }

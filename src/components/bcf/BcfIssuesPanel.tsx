@@ -76,7 +76,7 @@ export const BcfIssuesPanel: React.FC = () => {
     statuses: [],
     topicType: '',
     assignedTos: [],
-    label: '',
+    labels: [],
     orderBy: 'modified_date desc',
   });
 
@@ -86,7 +86,7 @@ export const BcfIssuesPanel: React.FC = () => {
       statuses: [],
       topicType: '',
       assignedTos: [],
-      label: '',
+      labels: [],
       orderBy: 'modified_date desc',
     });
   }, [projectId]);
@@ -152,6 +152,8 @@ export const BcfIssuesPanel: React.FC = () => {
     filters.assignedTos[0] !== UNASSIGNED_FILTER_VALUE
       ? filters.assignedTos[0]
       : '';
+  const singleServerLabel =
+    filters.labels.length === 1 ? filters.labels[0] : '';
 
   const topicsQuery = useQuery({
     queryKey: [
@@ -163,9 +165,10 @@ export const BcfIssuesPanel: React.FC = () => {
       singleServerAssignee,
       filters.assignedTos.length > 1 ||
       filters.assignedTos.includes(UNASSIGNED_FILTER_VALUE)
-        ? 'multi'
-        : 'single',
-      filters.label,
+        ? 'multi-assignee'
+        : 'single-assignee',
+      singleServerLabel,
+      filters.labels.length > 1 ? 'multi-label' : 'single-label',
       filters.orderBy,
     ],
     queryFn: () => {
@@ -173,7 +176,8 @@ export const BcfIssuesPanel: React.FC = () => {
       const looksLikeCode = /^TOP-\d+$/i.test(trimmedSearch);
       const needsClientMultiFilter =
         filters.assignedTos.length > 1 ||
-        filters.assignedTos.includes(UNASSIGNED_FILTER_VALUE);
+        filters.assignedTos.includes(UNASSIGNED_FILTER_VALUE) ||
+        filters.labels.length > 1;
       return bcfService.getTopics(projectId, {
         ...(looksLikeCode
           ? { server_assigned_id: trimmedSearch.toUpperCase() }
@@ -185,7 +189,7 @@ export const BcfIssuesPanel: React.FC = () => {
           : {}),
         ...(filters.topicType ? { topic_type: filters.topicType } : {}),
         ...(singleServerAssignee ? { assigned_to: singleServerAssignee } : {}),
-        ...(filters.label ? { labels: filters.label } : {}),
+        ...(singleServerLabel ? { labels: singleServerLabel } : {}),
         $orderby: filters.orderBy,
         $top: needsClientMultiFilter ? 250 : 100,
       });
@@ -195,15 +199,35 @@ export const BcfIssuesPanel: React.FC = () => {
 
   const filteredTopics = useMemo(() => {
     const raw = topicsQuery.data ?? [];
-    if (filters.assignedTos.length === 0) return raw;
-    const wanted = new Set(filters.assignedTos.map((v) => v.toLowerCase()));
-    const includeUnassigned = wanted.has(UNASSIGNED_FILTER_VALUE.toLowerCase());
+    if (filters.assignedTos.length === 0 && filters.labels.length === 0) {
+      return raw;
+    }
+    const wantedAssignees = new Set(
+      filters.assignedTos.map((v) => v.toLowerCase()),
+    );
+    const includeUnassigned = wantedAssignees.has(
+      UNASSIGNED_FILTER_VALUE.toLowerCase(),
+    );
+    const wantedLabels = new Set(filters.labels.map((l) => l.toLowerCase()));
+
     return raw.filter((t) => {
-      const assignee = (t.assigned_to ?? '').trim().toLowerCase();
-      if (!assignee) return includeUnassigned;
-      return wanted.has(assignee);
+      if (wantedAssignees.size > 0) {
+        const assignee = (t.assigned_to ?? '').trim().toLowerCase();
+        const matchesAssignee = !assignee
+          ? includeUnassigned
+          : wantedAssignees.has(assignee);
+        if (!matchesAssignee) return false;
+      }
+      if (wantedLabels.size > 0) {
+        const topicLabels = t.labels ?? [];
+        const matchesLabel = topicLabels.some((lbl) =>
+          wantedLabels.has(lbl.toLowerCase()),
+        );
+        if (!matchesLabel) return false;
+      }
+      return true;
     });
-  }, [filters.assignedTos, topicsQuery.data]);
+  }, [filters.assignedTos, filters.labels, topicsQuery.data]);
 
   const requestCaptureViewpoint = useCallback(
     async (modalTitle?: string): Promise<CreateViewpointPayload | null> => {
